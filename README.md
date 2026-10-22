@@ -35,3 +35,7 @@ Installs `~/.local/bin/rankine`, a desktop entry and the icon for the current us
 | DIMM speed and voltage | `dmidecode` reads SMBIOS tables, which are root-only | `sudo dmidecode -t 17 > ~/.cache/rankine/dmidecode-memory.txt` once |
 
 CPU voltage on boards whose Super I/O chip doesn't label its inputs (e.g. `nct6687`) is a best guess and marked *est.*; compare it with your BIOS.
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).
