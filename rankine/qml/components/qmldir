@@ -1,0 +1,8 @@
+singleton Theme 1.0 Theme.qml
+Card 1.0 Card.qml
+ArcGauge 1.0 ArcGauge.qml
+Tile 1.0 Tile.qml
+Sparkline 1.0 Sparkline.qml
+CoreGrid 1.0 CoreGrid.qml
+BarRow 1.0 BarRow.qml
+PillButton 1.0 PillButton.qml

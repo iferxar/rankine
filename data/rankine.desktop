@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Rankine
+GenericName=Hardware Monitor
+GenericName[es]=Monitor de hardware
+Comment=CPU, GPU, memory, fan and drive sensors at a glance
+Comment[es]=Sensores de CPU, GPU, memoria, ventiladores y discos de un vistazo
+Exec=rankine
+Icon=rankine
+Terminal=false
+Categories=System;Monitor;Qt;
+Keywords=sensors;temperature;fan;cpu;gpu;monitor;hwmon;
+StartupWMClass=rankine

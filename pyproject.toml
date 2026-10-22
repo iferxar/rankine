@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rankine"
+dynamic = ["version"]
+description = "Glanceable hardware sensor monitor for Linux (CPU, GPU, memory, fans, drives)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["PySide6>=6.6"]
+
+[project.scripts]
+rankine = "rankine.__main__:main"
+
+[tool.setuptools]
+packages = ["rankine", "rankine.sensors"]
+
+[tool.setuptools.dynamic]
+version = { attr = "rankine.__version__" }
+
+[tool.setuptools.package-data]
+rankine = ["qml/*.qml", "qml/components/*.qml", "qml/components/qmldir", "icons/*.svg"]
