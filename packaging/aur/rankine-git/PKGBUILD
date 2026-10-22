@@ -1,0 +1,40 @@
+# Maintainer: iferxar <iferrero at gmail dot com>
+pkgname=rankine-git
+_pkgname=rankine
+pkgver=0.1.0.r2.g5c095dd
+pkgrel=1
+pkgdesc="Glanceable hardware sensor monitor for CPU, GPU, memory, fans and drives (Qt/QML, git version)"
+arch=('any')
+url="https://github.com/iferxar/rankine"
+license=('GPL-3.0-or-later')
+depends=('python' 'pyside6')
+makedepends=('git' 'python-build' 'python-installer' 'python-setuptools' 'python-wheel')
+optdepends=('pciutils: GPU model names'
+            'dmidecode: DIMM speed and voltage'
+            'nvidia-utils: NVIDIA GPU metrics')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+install=rankine.install
+source=("$_pkgname::git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  # v0.1.0-3-gabc1234 -> 0.1.0.r3.gabc1234; before the first tag, fall back to the source version.
+  git describe --long --tags 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' && return
+  printf "%s.r%s.g%s" "$(sed -n 's/^__version__ = "\(.*\)"/\1/p' rankine/__init__.py)" \
+    "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+build() {
+  cd "$_pkgname"
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "$_pkgname"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 data/rankine.desktop -t "$pkgdir/usr/share/applications"
+  install -Dm644 rankine/icons/rankine.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"
+  install -Dm644 packaging/rankine-rapl.conf -t "$pkgdir/usr/share/rankine"
+}

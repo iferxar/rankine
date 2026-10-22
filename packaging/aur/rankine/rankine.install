@@ -1,0 +1,8 @@
+post_install() {
+  cat <<'MSG'
+==> CPU package power needs read access to the RAPL energy counter, which is
+==> root-only since Linux 5.10 (CVE-2020-8694). To allow it for all users:
+==>   sudo cp /usr/share/rankine/rankine-rapl.conf /etc/tmpfiles.d/
+==>   sudo systemd-tmpfiles --create /etc/tmpfiles.d/rankine-rapl.conf
+MSG
+}
