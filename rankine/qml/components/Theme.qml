@@ -1,29 +1,45 @@
 pragma Singleton
 import QtQuick
 
+// Nord night backgrounds with teal / cyan / mint accents, in the spirit of the CachyOS Nord theme.
 QtObject {
-    readonly property color bg: "#0b1119"
-    readonly property color card: "#111925"
-    readonly property color tile: "#162030"
-    readonly property color border: "#1f2c40"
-    readonly property color track: "#243247"
-    readonly property color text: "#e6edf5"
-    readonly property color muted: "#8a99ae"
-    readonly property color dim: "#5c6b80"
-    readonly property color green: "#10b981"
-    readonly property color blue: "#38bdf8"
-    readonly property color amber: "#f59e0b"
-    readonly property color red: "#ef4444"
+    readonly property color bg: "#141722"
+    readonly property color bgDeep: "#0f111a"
+    readonly property color card: "#1b1f2e"
+    readonly property color tile: "#161926"
+    readonly property color border: "#262b3f"
+    readonly property color borderBright: "#323a55"
+    readonly property color track: "#262c40"
+    readonly property color text: "#e5e9f0"
+    readonly property color muted: "#8f98ad"
+    readonly property color dim: "#5f667a"
 
-    function tempColor(t) {
-        if (t === null || t === undefined) return muted
-        return t < 65 ? green : t < 85 ? amber : red
-    }
+    readonly property color teal: "#00aa88"
+    readonly property color tealDeep: "#008066"
+    readonly property color mint: "#00ffcc"
+    readonly property color cyan: "#00ccff"
+    readonly property color amber: "#ffb84d"
+    readonly property color orange: "#ff6a00"
+    readonly property color red: "#ff4d6d"
 
-    function loadColor(p) {
-        if (p === null || p === undefined) return muted
-        return p < 70 ? blue : p < 90 ? amber : red
+    // Back-compat names used across components.
+    readonly property color green: teal
+    readonly property color blue: cyan
+
+    readonly property string fontFamily: Qt.fontFamilies().indexOf("Fira Sans") >= 0 ? "Fira Sans" : ""
+
+    // [start, end] gradient for a temperature.
+    function tempGradient(t) {
+        if (t === null || t === undefined) return [track, track]
+        return t < 65 ? [teal, mint] : t < 85 ? [orange, amber] : ["#d6284b", red]
     }
+    function tempColor(t) { return tempGradient(t)[1] }
+
+    function loadGradient(p) {
+        if (p === null || p === undefined) return [track, track]
+        return p < 70 ? [teal, cyan] : p < 90 ? [orange, amber] : ["#d6284b", red]
+    }
+    function loadColor(p) { return loadGradient(p)[1] }
 
     function fmt(v, digits, unit) {
         if (v === null || v === undefined || isNaN(v)) return "N/A"

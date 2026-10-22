@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Shapes
 import "components"
 
 ApplicationWindow {
@@ -12,6 +13,7 @@ ApplicationWindow {
     visible: true
     title: "Rankine"
     color: Theme.bg
+    font.family: Theme.fontFamily
 
     readonly property var d: backend.data
     readonly property var cpu: d.cpu
@@ -19,12 +21,54 @@ ApplicationWindow {
     readonly property var mem: d.mem
     readonly property var g: gpu || ({})
     function st(key) { return d.stats[key] }
-    function statusColor(s) { return s === "COOL" ? Theme.green : s === "WARM" ? Theme.amber : s === "HOT" ? Theme.red : Theme.muted }
+    function statusColor(s) { return s === "COOL" ? Theme.mint : s === "WARM" ? Theme.amber : s === "HOT" ? Theme.red : Theme.muted }
+
+    // Nebula glow behind the cards, echoing the CachyOS space wallpapers.
+    background: Rectangle {
+        color: Theme.bg
+        Shape {
+            anchors.fill: parent
+            preferredRendererType: Shape.CurveRenderer
+            ShapePath {
+                strokeWidth: -1
+                fillGradient: RadialGradient {
+                    centerX: win.width * 0.85; centerY: 0
+                    centerRadius: win.width * 0.6
+                    focalX: centerX; focalY: centerY
+                    GradientStop { position: 0.0; color: Qt.rgba(0, 0.67, 0.53, 0.16) }
+                    GradientStop { position: 1.0; color: "transparent" }
+                }
+                PathRectangle { width: win.width; height: win.height }
+            }
+            ShapePath {
+                strokeWidth: -1
+                fillGradient: RadialGradient {
+                    centerX: 0; centerY: win.height
+                    centerRadius: win.width * 0.5
+                    focalX: centerX; focalY: centerY
+                    GradientStop { position: 0.0; color: Qt.rgba(0, 0.8, 1, 0.08) }
+                    GradientStop { position: 1.0; color: "transparent" }
+                }
+                PathRectangle { width: win.width; height: win.height }
+            }
+        }
+    }
 
     header: Rectangle {
-        color: Theme.bg
-        implicitHeight: 56
-        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.border }
+        color: Theme.bgDeep
+        implicitHeight: 58
+        Rectangle {
+            anchors.bottom: parent.bottom
+            width: parent.width
+            height: 1
+            gradient: Gradient {
+                orientation: Gradient.Horizontal
+                GradientStop { position: 0.0; color: Theme.teal }
+                GradientStop { position: 0.35; color: Theme.cyan }
+                GradientStop { position: 0.7; color: Theme.border }
+                GradientStop { position: 1.0; color: Theme.border }
+            }
+        }
 
         RowLayout {
             anchors.fill: parent
@@ -32,19 +76,21 @@ ApplicationWindow {
             anchors.rightMargin: 16
             spacing: 10
 
-            Rectangle { implicitWidth: 10; implicitHeight: 10; radius: 5; color: Theme.blue }
+            Facet { size: 20 }
             Text {
                 text: "RANKINE"
                 color: Theme.text
-                font.pixelSize: 16
+                font.family: Theme.fontFamily
+                font.pixelSize: 17
                 font.weight: Font.Bold
-                font.letterSpacing: 1
+                font.letterSpacing: 2.5
             }
             Text {
                 Layout.fillWidth: true
                 Layout.leftMargin: 24
                 text: win.cpu.name + (win.gpu ? "  ·  " + win.gpu.name : "")
                 color: Theme.muted
+                font.family: Theme.fontFamily
                 font.pixelSize: 12
                 elide: Text.ElideRight
             }
@@ -88,7 +134,7 @@ ApplicationWindow {
                         ArcGauge {
                             Layout.preferredWidth: 140; Layout.preferredHeight: 150
                             value: win.cpu.temp ?? 0; minValue: 20; maxValue: 100
-                            color: Theme.tempColor(win.cpu.temp)
+                            colors: Theme.tempGradient(win.cpu.temp)
                             valueText: Theme.fmt(win.cpu.temp, 0, "°C")
                             label: "Temp"; coloredLabel: true
                             footer: Theme.range(win.st("cpu.temp"), 0, "°C")
@@ -97,7 +143,7 @@ ApplicationWindow {
                             Layout.preferredWidth: 120; Layout.preferredHeight: 150
                             thickness: 9
                             value: win.cpu.load ?? 0
-                            color: Theme.blue
+                            colors: Theme.loadGradient(win.cpu.load)
                             valueText: Theme.fmt(win.cpu.load, 0, "%")
                             label: "Load"
                             footer: Theme.range(win.st("cpu.load"), 0, "%")
@@ -150,7 +196,7 @@ ApplicationWindow {
                         ArcGauge {
                             Layout.preferredWidth: 140; Layout.preferredHeight: 150
                             value: win.g.temp ?? 0; minValue: 20; maxValue: 100
-                            color: Theme.tempColor(win.g.temp)
+                            colors: Theme.tempGradient(win.g.temp)
                             valueText: Theme.fmt(win.g.temp, 0, "°C")
                             label: "Temp"; coloredLabel: true
                             footer: win.g.hotspot != null
@@ -161,7 +207,7 @@ ApplicationWindow {
                             Layout.preferredWidth: 120; Layout.preferredHeight: 150
                             thickness: 9
                             value: win.g.load ?? 0
-                            color: Theme.blue
+                            colors: Theme.loadGradient(win.g.load)
                             valueText: Theme.fmt(win.g.load, 0, "%")
                             label: "Core"
                             footer: Theme.range(win.st("gpu.load"), 0, "%")
@@ -209,7 +255,7 @@ ApplicationWindow {
                 Card {
                     title: "Memory"
                     subtitle: Theme.fmt(win.mem.used, 1, "") + " / " + Theme.fmt(win.mem.total, 1, " GB") + "   " + Theme.fmt(win.mem.percent, 0, " %")
-                    subtitleColor: Theme.blue
+                    subtitleColor: Theme.cyan
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     Layout.alignment: Qt.AlignTop
@@ -221,7 +267,11 @@ ApplicationWindow {
                         Rectangle {
                             height: parent.height; radius: parent.radius
                             width: parent.width * (win.mem.percent ?? 0) / 100
-                            color: Theme.blue
+                            gradient: Gradient {
+                                orientation: Gradient.Horizontal
+                                GradientStop { position: 0.0; color: Theme.teal }
+                                GradientStop { position: 1.0; color: Theme.cyan }
+                            }
                             Behavior on width { NumberAnimation { duration: 400 } }
                         }
                     }
@@ -249,8 +299,8 @@ ApplicationWindow {
 
                     Sparkline {
                         labelA: "Memory Usage (%)"; labelB: ""
-                        colorA: Theme.blue
-                        seriesA: win.d.history["mem.percent"]; fillA: true
+                        colorA: Theme.cyan
+                        seriesA: win.d.history["mem.percent"]
                     }
                 }
 
@@ -282,14 +332,19 @@ ApplicationWindow {
                         }
                     }
 
-                    Text {
+                    RowLayout {
                         visible: win.d.drives.length > 0
                         Layout.topMargin: 6
-                        text: "DRIVES"
-                        color: Theme.text
-                        font.pixelSize: 13
-                        font.weight: Font.DemiBold
-                        font.letterSpacing: 0.6
+                        spacing: 8
+                        Facet { size: 13 }
+                        Text {
+                            text: "DRIVES"
+                            color: Theme.text
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 13
+                            font.weight: Font.Bold
+                            font.letterSpacing: 1.2
+                        }
                     }
                     Repeater {
                         model: win.d.drives
@@ -297,7 +352,7 @@ ApplicationWindow {
                             required property var modelData
                             label: modelData.name
                             valueText: Theme.fmt(modelData.temp, 0, "°C")
-                            barColor: Theme.tempColor(modelData.temp)
+                            colors: Theme.tempGradient(modelData.temp)
                             frac: modelData.temp != null ? (modelData.temp - 20) / ((modelData.max || 80) - 20) : 0
                         }
                     }

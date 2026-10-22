@@ -21,24 +21,30 @@ GridLayout {
 
             Layout.fillWidth: true
             Layout.preferredWidth: 1
-            implicitHeight: 28
-            radius: 6
+            implicitHeight: 30
+            radius: 8
             color: Theme.tile
-            border.color: hover.hovered ? Theme.blue : Theme.border
+            border.color: hover.hovered ? Theme.cyan : Theme.border
 
             Text {
                 anchors { left: parent.left; leftMargin: 7; top: parent.top; topMargin: 4 }
                 text: "C" + chip.modelData.id + " " + Theme.fmt(chip.modelData.load, 0, "%")
                 color: Theme.text
+                font.family: Theme.fontFamily
                 font.pixelSize: 11
                 font.weight: Font.DemiBold
+                font.features: { "tnum": 1 }
             }
             Rectangle {
                 anchors { left: parent.left; bottom: parent.bottom; leftMargin: 7; bottomMargin: 4 }
                 height: 3
                 radius: 1.5
                 width: Math.max(3, (chip.width - 14) * chip.load / 100)
-                color: Theme.loadColor(chip.modelData.load)
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0.0; color: Theme.loadGradient(chip.modelData.load)[0] }
+                    GradientStop { position: 1.0; color: Theme.loadGradient(chip.modelData.load)[1] }
+                }
                 Behavior on width { NumberAnimation { duration: 300 } }
             }
 
