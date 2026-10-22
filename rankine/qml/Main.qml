@@ -279,21 +279,71 @@ ApplicationWindow {
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 8
+                        // Configured values (BIOS) when detected, otherwise the module's rated profile from SPD.
                         Tile {
-                            title: "Clock"; value: Theme.fmt(win.mem.clock, 0, " MT/s")
-                            footer: win.mem.dimm_hint || "DIMM configured speed"
+                            readonly property string rated: win.mem.rated_clock
+                                ? win.mem.rated_profile + " " + win.mem.rated_clock + (win.mem.rated_cl ? " CL" + win.mem.rated_cl : "")
+                                : ""
+                            title: "Clock"
+                            value: Theme.fmt(win.mem.clock ?? win.mem.rated_clock, 0, " MT/s")
+                            badge: win.mem.dimm_detected || !win.mem.rated_clock ? "" : win.mem.rated_profile
+                            footer: win.mem.dimm_detected ? "Configured" + (rated ? " · rated " + rated : "")
+                                  : rated ? "Module rating, not confirmed" : "no SPD data"
                         }
                         Tile {
-                            title: "Voltage"; value: Theme.fmt(win.mem.voltage, 2, " V")
-                            footer: win.mem.dimm_hint || "DIMM configured voltage"
+                            title: "Voltage"
+                            value: Theme.fmt(win.mem.voltage ?? win.mem.rated_voltage, 2, " V")
+                            badge: win.mem.dimm_detected || win.mem.rated_voltage == null ? "" : win.mem.rated_profile
+                            // SMBIOS often keeps reporting the JEDEC 1.2 V even with XMP applied.
+                            footer: win.mem.dimm_detected
+                                  ? "As reported by BIOS" + (win.mem.rated_voltage != null && Math.abs(win.mem.rated_voltage - win.mem.voltage) > 0.005
+                                                             ? " · " + win.mem.rated_profile + " " + Theme.fmt(win.mem.rated_voltage, 2, " V") : "")
+                                  : win.mem.rated_voltage != null ? "Module rating, not confirmed" : "needs Detect"
                         }
                         Tile {
+                            visible: win.mem.temp != null
                             title: "Temperature"; value: Theme.fmt(win.mem.temp, 1, "°C")
-                            footer: win.mem.temp == null ? "no DIMM sensor" : Theme.range(win.st("mem.temp"), 1, "", true)
+                            footer: Theme.range(win.st("mem.temp"), 1, "", true)
+                        }
+                        Tile {
+                            visible: win.mem.temp == null
+                            title: "Modules"; value: win.mem.modules || "N/A"
+                            footer: win.mem.part ? win.mem.part + " · " + win.mem.mem_type : "no SPD data"
                         }
                         Tile {
                             title: "Swap"; value: Theme.fmt(win.mem.swap_used, 1, "") + " / " + Theme.fmt(win.mem.swap_total, 0, " GB")
                             footer: Theme.range(win.st("mem.swap_used"), 2, " GB")
+                        }
+                    }
+
+                    Rectangle {
+                        visible: !win.mem.dimm_detected
+                        Layout.fillWidth: true
+                        implicitHeight: detectRow.implicitHeight + 16
+                        radius: 10
+                        color: Qt.rgba(0, 0.67, 0.53, 0.08)
+                        border.color: "#14524b"
+                        RowLayout {
+                            id: detectRow
+                            anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 10; leftMargin: 12 }
+                            spacing: 10
+                            Facet { size: 12 }
+                            Text {
+                                Layout.fillWidth: true
+                                text: backend.detectState && backend.detectState !== "running"
+                                      ? "Could not read the BIOS memory settings (" + backend.detectState + "). From a terminal: sudo dmidecode -t 17 | rankine --import-dimm"
+                                      : "The speed and voltage the BIOS actually applied are in the SMBIOS tables, readable only as admin. Detect once and Rankine remembers it."
+                                color: Theme.muted
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 11
+                                wrapMode: Text.WordWrap
+                            }
+                            PillButton {
+                                text: backend.detectState === "running" ? "Detecting…" : "Detect"
+                                outlined: true
+                                accent: Theme.mint
+                                onClicked: backend.detectDimms()
+                            }
                         }
                     }
 

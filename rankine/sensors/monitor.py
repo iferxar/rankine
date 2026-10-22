@@ -9,7 +9,7 @@ from collections import deque
 from .cpu import CpuReader
 from .gpu import detect_gpu
 from .hwmon import discover
-from .system import DriveReader, FanReader, MemoryReader
+from .system import DriveReader, FanReader, MemoryReader, save_dimm_cache
 
 HISTORY_LEN = 120
 HISTORY_KEYS = ("cpu.temp", "cpu.load", "gpu.temp", "gpu.load", "mem.percent")
@@ -53,6 +53,10 @@ class BaseMonitor:
     def reset_stats(self):
         self.stats.reset()
 
+    def save_dimm_info(self, dmidecode_output: str) -> bool:
+        """Stores configured DIMM speed/voltage from a privileged dmidecode run."""
+        return False
+
     def read(self) -> dict:
         raise NotImplementedError
 
@@ -82,6 +86,12 @@ class Monitor(BaseMonitor):
         self.mem = MemoryReader(chips)
         self.fans = FanReader(chips, exclude=getattr(self.gpu, "chip", None))
         self.drives = DriveReader(chips)
+
+    def save_dimm_info(self, dmidecode_output: str) -> bool:
+        if not save_dimm_cache(dmidecode_output, self.mem.modules):
+            return False
+        self.mem.reload_dimm_info()
+        return True
 
     def read(self) -> dict:
         gpu = self.gpu.read() if self.gpu else None
@@ -129,8 +139,10 @@ class DemoMonitor(BaseMonitor):
                     "fan_rpm": 0 if gpu_load < 30 else 900 + 12 * gpu_load, "fan_max": 3100,
                     "fan_percent": None},
             "mem": {"used": 9.6 + wave, "total": 31.3, "percent": 100 * (9.6 + wave) / 31.3,
-                    "swap_used": 0.2, "swap_total": 16.0, "clock": 3600, "voltage": 1.35,
-                    "temp": None, "dimm_hint": None},
+                    "swap_used": 0.2, "swap_total": 16.0, "cached": 8.4, "clock": 3600,
+                    "voltage": 1.35, "dimm_detected": True, "temp": None, "modules": "2 × 16 GB",
+                    "mem_type": "DDR4", "part": "Demo DDR4-3600 kit", "rated_clock": 3600,
+                    "rated_cl": 18, "rated_voltage": 1.35, "rated_profile": "XMP"},
             "fans": [{"name": f"Fan #{i}", "rpm": r, "text": f"{r:.0f} RPM", "frac": r / 2500}
                      for i, r in ((1, 900 + 600 * wave), (3, 1100 + 500 * wave), (4, 1200 + 400 * wave))],
             "drives": [{"name": "Demo NVMe SSD", "temp": 36 + 8 * wave, "max": 70}],

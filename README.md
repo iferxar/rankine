@@ -4,7 +4,7 @@ A glanceable hardware sensor monitor for Linux, built with Python, PySide6 and Q
 
 - **CPU**: temperature, total and per-thread load and clock, package power, core voltage, estimated current
 - **GPU**: temperature and hotspot, load, clock, power, voltage, estimated current, VRAM (AMD via sysfs, NVIDIA via `nvidia-smi`, Intel partial)
-- **Memory**: RAM and swap usage, DIMM configured speed and voltage, DIMM temperature when a sensor exists
+- **Memory**: RAM and swap usage; module size, vendor, part number and XMP/JEDEC rating read from the SPD EEPROMs (DDR4 `ee1004`, DDR5 `spd5118`); configured speed and voltage; DIMM temperature when a sensor exists
 - **Fans and drives**: every hwmon fan header that reports a speed, NVMe/SATA temperatures
 - Min / avg / max per metric since launch (or since *Reset Stats*), 120-second history graphs
 
@@ -32,7 +32,7 @@ Installs `~/.local/bin/rankine`, a desktop entry and the icon for the current us
 | Reading | Why | How to enable |
 |---|---|---|
 | CPU power and current | RAPL energy counters are root-only since Linux 5.10 ([CVE-2020-8694](https://nvd.nist.gov/vuln/detail/CVE-2020-8694)) | `scripts/enable-rapl.sh` installs a systemd-tmpfiles rule that makes them world-readable |
-| DIMM speed and voltage | `dmidecode` reads SMBIOS tables, which are root-only | `sudo dmidecode -t 17 > ~/.cache/rankine/dmidecode-memory.txt` once |
+| Configured DIMM speed and voltage | SMBIOS tables are root-only; without them Rankine shows the module's rated XMP/JEDEC values, marked as such | Click **Detect** in the Memory card: it runs `dmidecode` once through polkit and caches the result in `~/.cache/rankine/dimm.json` (dropped automatically if the installed modules change) |
 
 CPU voltage on boards whose Super I/O chip doesn't label its inputs (e.g. `nct6687`) is a best guess and marked *est.*; compare it with your BIOS.
 

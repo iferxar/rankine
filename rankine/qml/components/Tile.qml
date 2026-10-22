@@ -7,6 +7,7 @@ Rectangle {
     property string value
     property string footer
     property bool estimated: false
+    property string badge: estimated ? "est." : ""
     property color valueColor: Theme.text
 
     color: Theme.tile
@@ -50,7 +51,7 @@ Rectangle {
                 elide: Text.ElideRight
             }
             Rectangle {
-                visible: root.estimated
+                visible: root.badge !== ""
                 color: "#0f3a3a"
                 border.color: "#14524b"
                 radius: 4
@@ -59,7 +60,7 @@ Rectangle {
                 Text {
                     id: est
                     anchors.centerIn: parent
-                    text: "est."
+                    text: root.badge
                     color: Theme.mint
                     font.family: Theme.fontFamily
                     font.pixelSize: 10

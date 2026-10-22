@@ -1,14 +1,17 @@
 """Memory, fans and drive temperatures."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
 
 from .hwmon import Chip, by_name, read_text
+from .spd import read_modules
 
 GIB = 1024 ** 3
-DMI_CACHE = os.path.expanduser("~/.cache/rankine/dmidecode-memory.txt")
+DMI_CACHE = os.path.expanduser("~/.cache/rankine/dimm.json")
+DMIDECODE_CMD = ["dmidecode", "-t", "17"]
 
 
 def _meminfo() -> dict[str, int]:
@@ -33,24 +36,70 @@ def parse_dmidecode(text: str) -> dict:
     return {}
 
 
-def probe_dimms() -> dict:
-    """dmidecode needs root; fall back to a dump the user saved once with sudo."""
-    try:
-        res = subprocess.run(["dmidecode", "-t", "17"], capture_output=True, text=True, timeout=3)
-        if res.returncode == 0:
-            info = parse_dmidecode(res.stdout)
+def _fingerprint(modules: list[dict]) -> list[str]:
+    """Identifies the installed DIMMs so a cached BIOS reading is dropped after a RAM swap."""
+    return sorted(f"{m['vendor']}:{m['part']}:{m['size_gb']}" for m in modules)
+
+
+def save_dimm_cache(dmidecode_output: str, modules: list[dict]) -> bool:
+    info = parse_dmidecode(dmidecode_output)
+    if not info:
+        return False
+    os.makedirs(os.path.dirname(DMI_CACHE), exist_ok=True)
+    with open(DMI_CACHE, "w") as f:
+        json.dump({**info, "modules": _fingerprint(modules)}, f)
+    return True
+
+
+def load_dimm_info(modules: list[dict]) -> dict:
+    """Configured DIMM speed/voltage: live when running as root, else the cache from a past detect."""
+    if os.geteuid() == 0:
+        try:
+            res = subprocess.run(DMIDECODE_CMD, capture_output=True, text=True, timeout=3)
+            info = parse_dmidecode(res.stdout) if res.returncode == 0 else {}
             if info:
                 return info
-    except (OSError, subprocess.SubprocessError):
-        pass
-    text = read_text(DMI_CACHE)
-    return parse_dmidecode(text) if text else {}
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        with open(DMI_CACHE) as f:
+            cached = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if modules and cached.get("modules") != _fingerprint(modules):
+        return {}
+    return cached
+
+
+def _summarize(modules: list[dict]) -> dict:
+    if not modules:
+        return {"modules": None, "mem_type": None, "part": None, "rated_clock": None, "rated_cl": None,
+                "rated_voltage": None, "rated_profile": None}
+    first = modules[0]
+    sizes = {m["size_gb"] for m in modules}
+    count = f"{len(modules)} × {first['size_gb']:g} GB" if len(sizes) == 1 \
+        else " + ".join(f"{m['size_gb']:g}" for m in modules) + " GB"
+    xmp = first["xmp"]
+    return {
+        "modules": count,
+        "mem_type": first["type"],
+        "part": " ".join(p for p in (first["vendor"], first["part"]) if p) or None,
+        "rated_clock": xmp["mts"] if xmp else first["jedec_mts"],
+        "rated_cl": xmp["cl"] if xmp else first["jedec_cl"],
+        "rated_voltage": xmp["voltage"] if xmp else None,
+        "rated_profile": "XMP" if xmp else "JEDEC",
+    }
 
 
 class MemoryReader:
     def __init__(self, chips: list[Chip]):
         self.temps = [c.find("temp") for c in by_name(chips, "spd5118", "jc42") if c.find("temp")]
-        self.dimm = probe_dimms()
+        self.modules = read_modules()
+        self.summary = _summarize(self.modules)
+        self.reload_dimm_info()
+
+    def reload_dimm_info(self):
+        self.dimm = load_dimm_info(self.modules)
 
     def read(self) -> dict:
         m = _meminfo()
@@ -64,10 +113,12 @@ class MemoryReader:
             "percent": 100 * used / total if total else None,
             "swap_used": (swap_total - m.get("SwapFree", 0)) / GIB,
             "swap_total": swap_total / GIB,
+            "cached": (m.get("Cached", 0) + m.get("Buffers", 0)) / GIB,
             "clock": self.dimm.get("clock"),
             "voltage": self.dimm.get("voltage"),
+            "dimm_detected": bool(self.dimm),
             "temp": max(temps) if temps else None,
-            "dimm_hint": None if self.dimm else "needs dmidecode (root)",
+            **self.summary,
         }
 
 
