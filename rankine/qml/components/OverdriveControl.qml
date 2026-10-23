@@ -5,6 +5,7 @@ ControlTile {
     id: root
     property string card
     property var od: ({})
+    property real peakVoltage: NaN  // highest GPU voltage seen this session, in mV
     readonly property var boot: od.boot || ({})
     readonly property var range: od.range || ({})
     readonly property bool dirty: core.dirty || mem.dirty || volt.dirty
@@ -28,6 +29,7 @@ ControlTile {
         value: root.od.sclk ? root.od.sclk[root.od.sclk.length - 1] : 0
         defaultValue: root.boot.sclk_max ?? NaN
         stepSize: 5
+        hint: "Same number as the max frequency in Windows tools. Their min frequency is left to the driver here."
     }
     ValueSlider {
         id: mem
@@ -39,6 +41,8 @@ ControlTile {
         value: root.od.mclk ? root.od.mclk[root.od.mclk.length - 1] : 0
         defaultValue: root.boot.mclk_max ?? NaN
         stepSize: 5
+        hint: "Windows tools show memory at double rate (" + Math.round(mem.shown) * 2 + " MHz there): "
+              + "halve a guide's value, so 2150 MHz is 1075 here."
     }
     ValueSlider {
         id: volt
@@ -50,6 +54,10 @@ ControlTile {
         value: root.od.voltage_offset ?? 0
         defaultValue: root.boot.voltage_offset ?? NaN
         stepSize: 5
+        hint: "Linux shifts the whole voltage curve by this offset. Windows guides give a max voltage instead: "
+              + "the offset is roughly that value minus the card's stock peak voltage under load."
+              + (isNaN(root.peakVoltage) ? "" : " Highest voltage seen this session: "
+                 + Math.round(root.peakVoltage) + " mV (with the offset active at the time).")
     }
     Text {
         visible: root.overclocked || root.undervolted

@@ -119,6 +119,7 @@ ScrollView {
                         visible: !!gpuCard.live && !!gpuCard.live.overdrive
                         card: gpuCard.modelData.card
                         od: gpuCard.live && gpuCard.live.overdrive ? gpuCard.live.overdrive : ({})
+                        peakVoltage: backend.data.stats["gpu.voltage"] ? backend.data.stats["gpu.voltage"].max * 1000 : NaN
                     }
                     StabilityTile {
                         visible: !!gpuCard.live
