@@ -130,13 +130,15 @@ class AmdGpuControl:
         _write(f"{self.hwmon}/pwm1", int(round(max(0.0, min(100.0, percent)) * top / 100)))
 
     def restore(self, snap: dict) -> None:
-        """Puts back a snapshot; keeps going past individual failures and reports the first one."""
+        """Puts back a snapshot, writing only what differs; keeps going past individual failures
+        and reports the first one."""
+        now = self.snapshot()
         writes = []
-        if snap.get("power_uw") is not None:
+        if snap.get("power_uw") is not None and snap["power_uw"] != now["power_uw"]:
             writes.append((f"{self.hwmon}/power1_cap", snap["power_uw"]))
-        if snap.get("level") in LEVELS:
+        if snap.get("level") in LEVELS and snap["level"] != now["level"]:
             writes.append((f"{self.dev}/power_dpm_force_performance_level", snap["level"]))
-        if snap.get("profile") is not None:
+        if snap.get("profile") is not None and snap["profile"] != now["profile"]:
             writes.append((f"{self.dev}/pp_power_profile_mode", snap["profile"]))
         errors = []
         for path, value in writes:

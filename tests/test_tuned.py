@@ -108,7 +108,10 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(self.call("GetState")["pending"]["items"], ["card9: power limit 240 W"])
         time.sleep(self.CONFIRM + 0.7)
         self.assertEqual(self.cap(), "264000000")
-        self.assertIsNone(self.call("GetState")["pending"])
+        state = self.call("GetState")
+        self.assertIsNone(state["pending"])
+        self.assertFalse(state["cards"]["card9"]["changed"])
+        self.assertFalse(os.path.exists(os.path.join(self.runtime, "baseline.json")))
 
     def test_bad_request_is_refused(self):
         r = self.call("SetPowerLimit", "sd", "card9", 500)

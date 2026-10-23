@@ -155,6 +155,12 @@ class Tuned(QObject):
             except TuningError as e:
                 error = error or str(e)
                 log(f"{card} revert failed: {e}")
+                continue
+            # Back to exactly how Rankine found it: nothing left to restore later.
+            original = self.baseline.get(card)
+            if original and original.to_json() == self._state(card).to_json():
+                del self.baseline[card]
+        self._save_baseline()
         self.pending = None
         self.revert_timer.stop()
         return error
