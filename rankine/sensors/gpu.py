@@ -12,9 +12,23 @@ from .hwmon import Chip, by_name, read_int, read_text
 GIB = 1024 ** 3
 
 
+# PCI IDs that lspci names as a whole family; the revision tells the models apart.
+_BY_REVISION = {
+    ("0x1002", "0x73bf"): {"0xc0": "AMD Radeon RX 6900 XT", "0xc1": "AMD Radeon RX 6800 XT",
+                           "0xc3": "AMD Radeon RX 6800"},
+}
+
+
 def pci_name(device_path: str | None) -> str | None:
-    """Human name of a PCI device via lspci, e.g. 'AMD Radeon RX 6800/6800 XT / 6900 XT'."""
-    if not device_path or not shutil.which("lspci"):
+    """Human name of a PCI device via lspci, e.g. 'AMD Radeon RX 6800/6800 XT / 6900 XT', narrowed
+    to the exact model by revision where the family shares one ID."""
+    if not device_path:
+        return None
+    ids = tuple(read_text(f"{device_path}/{f}") for f in ("vendor", "device"))
+    exact = _BY_REVISION.get(ids, {}).get(read_text(f"{device_path}/revision"))
+    if exact:
+        return exact
+    if not shutil.which("lspci"):
         return None
     try:
         out = subprocess.run(["lspci", "-s", os.path.basename(device_path)],
