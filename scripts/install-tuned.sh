@@ -16,6 +16,7 @@ actions=/usr/share/polkit-1/actions/io.github.iferxar.Rankine.Tuned.policy
 if [ "${1:-}" = "--uninstall" ]; then
     systemctl disable --now rankine-tuned.service 2>/dev/null || true
     rm -rf "$lib" "$bin" "$unit" "$policy" "$actions"
+    rm -rf /var/lib/rankine-tuned  # boot profile
     systemctl daemon-reload
     systemctl reload dbus.service || true
     echo "Removed rankine-tuned."

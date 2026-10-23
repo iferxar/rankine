@@ -98,4 +98,6 @@ def run(monitor: BaseMonitor, interval: float) -> int:
     engine.load(QUrl.fromLocalFile(str(QML_DIR / "Main.qml")))
     if not engine.rootObjects():
         return 1
-    return app.exec()
+    code = app.exec()
+    del engine  # tear QML down while backend and tuner still exist, or its bindings see them as null
+    return code

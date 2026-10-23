@@ -49,7 +49,7 @@ ScrollView {
                     Text {
                         text: "What Rankine can tune on this machine, and what each feature still needs. "
                             + "Versions refer to the roadmap in docs/TUNING.md. Settings last until reboot or "
-                            + "until the helper stops; nothing is applied at boot."
+                            + "until the helper stops, unless you save them to apply at boot."
                         color: Theme.muted
                         font.family: Theme.fontFamily
                         font.pixelSize: 12
@@ -124,6 +124,14 @@ ScrollView {
                         visible: !!gpuCard.live
                         stability: tuner.stability
                         watching: !!tuner.state.fault_watch
+                    }
+                    BootProfileTile {
+                        visible: !!gpuCard.live && !!tuner.state.boot_profile
+                        card: gpuCard.modelData.card
+                        live: gpuCard.live || ({})
+                        profile: tuner.state.boot_profile || ({})
+                        tested: !!tuner.tested[gpuCard.modelData.card]
+                        pending: !!tuner.state.pending
                     }
                     // Without the helper, or for what it cannot control yet, explain instead.
                     Repeater {

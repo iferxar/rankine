@@ -24,6 +24,7 @@ class TuningClient(QObject):
     messageChanged = Signal()
     comparisonChanged = Signal()
     stabilityChanged = Signal()
+    testedChanged = Signal()
 
     def __init__(self, backend):
         super().__init__()
@@ -38,6 +39,8 @@ class TuningClient(QObject):
         self._comparison: dict = {}
         self._after: dict[str, list[float]] | None = None
         self._stability: dict = {}
+        self._tested_fp: dict[str, str] = {}  # card -> settings that passed a stability test
+        self._tested: dict[str, bool] = {}
         self._active = False
         self._polling = False
         self._watchers: set[QDBusPendingCallWatcher] = set()
@@ -67,6 +70,25 @@ class TuningClient(QObject):
     @Property("QVariantMap", notify=stabilityChanged)
     def stability(self):
         return self._stability
+
+    @Property("QVariantMap", notify=testedChanged)
+    def tested(self):
+        """card -> whether its current clocks, voltage and power passed a stability test."""
+        return self._tested
+
+    def _fingerprints(self) -> dict[str, str]:
+        fps = {}
+        for card, c in (self._state.get("cards") or {}).items():
+            od = c.get("overdrive") or {}
+            fps[card] = json.dumps([(c.get("power") or {}).get("cap"), od.get("sclk"), od.get("mclk"),
+                                    od.get("voltage_offset")])
+        return fps
+
+    def _update_tested(self):
+        tested = {card: self._tested_fp.get(card) == fp for card, fp in self._fingerprints().items()}
+        if tested != self._tested:
+            self._tested = tested
+            self.testedChanged.emit()
 
     def _set_busy(self, busy: bool):
         self._busy = busy
@@ -137,6 +159,7 @@ class TuningClient(QObject):
                 return
             self._state = state
             self.stateChanged.emit()
+            self._update_tested()
         self._call("GetState", [], done, timeout=3000)
 
     def _tick(self):
@@ -204,12 +227,14 @@ class TuningClient(QObject):
     def setFanAuto(self, card: str):
         self._change("SetFanCurve", [card, ""])
 
-    def _simple(self, method: str, args: list):
+    def _simple(self, method: str, args: list, timeout: int = 5000):
         def done(result, error):
             if result is None or not result.get("ok"):
                 self._set_message((result or {}).get("error") or error or "failed")
+            else:
+                self._set_message("")
             self._poll()
-        self._call(method, args, done, timeout=5000)
+        self._call(method, args, done, timeout=timeout)
 
     @Slot()
     def confirm(self):
@@ -227,6 +252,7 @@ class TuningClient(QObject):
     @Slot(int)
     def startStability(self, minutes: int):
         self._stability = {"running": True, "duration": minutes * 60, "elapsed": 0, "loaded": 0,
+                           "fingerprints": self._fingerprints(),
                            "faults_at_start": self._state.get("fault_count", 0), "faults": 0,
                            "verdict": "", "watching": bool(self._state.get("fault_watch"))}
         self.stabilityChanged.emit()
@@ -259,7 +285,24 @@ class TuningClient(QObject):
             st["verdict"] = "inconclusive"
         else:
             st["verdict"] = "passed"
+            # Settings changed mid-run do not count as tested.
+            now = self._fingerprints()
+            self._tested_fp.update({card: fp for card, fp in st["fingerprints"].items() if now.get(card) == fp})
+            self._update_tested()
         self.stabilityChanged.emit()
+
+    # ── boot profile ──
+    @Slot(str)
+    def saveBootProfile(self, card: str):
+        self._simple("SaveBootProfile", [card], timeout=CALL_TIMEOUT_MS)
+
+    @Slot()
+    def enableBootProfile(self):
+        self._simple("EnableBootProfile", [], timeout=CALL_TIMEOUT_MS)
+
+    @Slot(str)
+    def clearBootProfile(self, card: str):
+        self._simple("ClearBootProfile", [card])
 
     @Slot()
     def clearComparison(self):

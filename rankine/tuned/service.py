@@ -4,7 +4,8 @@ Safety rules (docs/TUNING.md):
 - every change must be confirmed within CONFIRM_SECONDS or it is reverted, by this service, not the UI;
 - what the card looked like before Rankine touched it is kept in a baseline file and restored when
   the service stops, or by `rankine-tuned --reset` (ExecStopPost) if it crashed;
-- nothing is applied at boot;
+- at boot, only a profile the user saved is applied, and not after a session that applied it and
+  then ended uncleanly (bootprofile.py);
 - a GPU hang or reset in the kernel log puts every changed card back to its original clocks, voltage
   and power (the fan curve stays: it only adds cooling).
 """
@@ -22,6 +23,7 @@ from PySide6.QtDBus import QDBusConnection, QDBusMessage
 
 from .. import __version__
 from .bus import BUS_NAME, INTERFACE, OBJECT_PATH
+from .bootprofile import SYSTEM_STATE_DIR, BootProfile
 from .fan import FanCurve
 from .faults import KMSG, FaultWatcher
 from .gpu import FAN_AUTO, VOLTAGE_OFFSET_RANGE, AmdGpuControl, TuningError, amd_controls
@@ -56,7 +58,8 @@ class CardState:
 @ClassInfo({"D-Bus Interface": INTERFACE})
 class Tuned(QObject):
     def __init__(self, bus: QDBusConnection, authorizer: Authorizer, runtime_dir: str,
-                 controls: dict[str, AmdGpuControl] | None = None, kmsg: str = KMSG):
+                 controls: dict[str, AmdGpuControl] | None = None, kmsg: str = KMSG,
+                 state_dir: str = SYSTEM_STATE_DIR):
         super().__init__()
         self.bus = bus
         self.auth = authorizer
@@ -77,6 +80,9 @@ class Tuned(QObject):
         self.watcher = FaultWatcher(self._on_fault, kmsg)
         if not self.watcher.available:
             log(f"GPU hang detection off: {self.watcher.error}")
+        self.profile = BootProfile(state_dir)
+        self.profile.start_session()
+        self._apply_boot_profile()
 
     # ── state helpers ──
     def _state(self, card: str) -> CardState:
@@ -176,10 +182,49 @@ class Tuned(QObject):
         self.revert_timer.stop()
         return error
 
+    def _apply_boot_profile(self) -> None:
+        if not self.profile.enabled:
+            if self.profile.data.get("notice"):
+                log("boot profile " + self.profile.data["notice"])
+            return
+        for card, data in self.profile.cards.items():
+            if card not in self.controls:
+                log(f"boot profile: {card} not found, skipped")
+                continue
+            before = self._state(card)
+            try:
+                self._restore(card, CardState.from_json(data))
+            except (TuningError, ValueError) as e:
+                try:
+                    self._restore(card, before)
+                except TuningError:
+                    pass
+                self.profile.disable(f"Not applied: {card} rejected it ({e}).")
+                log(f"boot profile for {card} failed: {e}")
+                continue
+            self.baseline[card] = before
+            log(f"{card} boot profile applied")
+        self._save_baseline()
+        if self.baseline:
+            self.profile.mark_applied()
+
+    def _risky(self, card: str) -> bool:
+        """Above the boot power limit or clocks, or undervolted: needs a passed stability test."""
+        now, boot = self.controls[card].snapshot(), self.boot[card]
+        if (now["power_uw"] or 0) > (boot["power_uw"] or 0):
+            return True
+        n, b = now.get("od") or {}, boot.get("od") or {}
+        return any((n.get(k) or 0) > (b.get(k) or 0) for k in ("sclk_max", "mclk_max")) \
+            or (n.get("voltage_offset") or 0) < (b.get("voltage_offset") or 0)
+
     def _on_fault(self, text: str) -> None:
         self.fault_count += 1
         self.faults = (self.faults + [{"time": time.time(), "text": text}])[-MAX_FAULTS:]
         log(f"GPU fault in the kernel log: {text}")
+        if self.profile.enabled and any(card in self.controls for card in self.profile.cards):
+            self.profile.disable(time.strftime("Turned off after a GPU hang at %H:%M. Save it again "
+                                               "once the settings pass a stability test."))
+            log("boot profile turned off")
         if self.pending:
             self.pending = None
             self.revert_timer.stop()
@@ -256,11 +301,14 @@ class Tuned(QObject):
                         "curve": [list(p) for p in curve.points] if curve else None,
                         "percent": c.fan_percent()},
                 "temp": edge, "junction": junction, "changed": card in self.baseline,
+                "risky": self._risky(card),
+                "is_boot_profile": self.profile.cards.get(card) == self._state(card).to_json(),
             }
         return json.dumps({"cards": cards, "pending": self._pending_json(msg.service()),
                            "confirm_seconds": CONFIRM_SECONDS,
                            "faults": self.faults, "fault_count": self.fault_count,
-                           "fault_watch": self.watcher.available})
+                           "fault_watch": self.watcher.available,
+                           "boot_profile": self.profile.to_json()})
 
     @Slot(str, float, QDBusMessage, result=str)
     def SetPowerLimit(self, card: str, watts: float, msg: QDBusMessage) -> str:
@@ -314,6 +362,49 @@ class Tuned(QObject):
         self._change(msg, "gpu-fan", card, description, lambda c: self._set_fan(card, points))
         return ""
 
+    def _authorized(self, msg: QDBusMessage, action: str, run) -> None:
+        """Delayed reply with run()'s result once polkit allows the caller."""
+        msg.setDelayedReply(True)
+
+        def done(allowed: bool, reason: str):
+            self._reply(msg, run() if allowed else {"ok": False, "error": reason})
+        self.auth.check(msg.service(), action, done)
+
+    @Slot(str, QDBusMessage, result=str)
+    def SaveBootProfile(self, card: str, msg: QDBusMessage) -> str:
+        """Applies the card's current settings at every boot from now on."""
+        def run():
+            if card not in self.controls:
+                return {"ok": False, "error": f"unknown card {card!r}"}
+            if self.pending:
+                return {"ok": False, "error": "keep or revert the current change first"}
+            self.profile.store(card, self._state(card).to_json())
+            self.profile.mark_applied()  # these settings are live now, so this session counts
+            pid, uid = self.auth.caller(msg.service())
+            log(f"{card} boot profile saved (uid {uid}, pid {pid})")
+            return {"ok": True}
+        self._authorized(msg, "boot-profile", run)
+        return ""
+
+    @Slot(QDBusMessage, result=str)
+    def EnableBootProfile(self, msg: QDBusMessage) -> str:
+        """Turns a profile that was switched off (after a crash or GPU hang) back on."""
+        def run():
+            if not self.profile.cards:
+                return {"ok": False, "error": "no boot profile saved"}
+            self.profile.enable()
+            log("boot profile re-enabled")
+            return {"ok": True}
+        self._authorized(msg, "boot-profile", run)
+        return ""
+
+    @Slot(str, QDBusMessage, result=str)
+    def ClearBootProfile(self, card: str, msg: QDBusMessage) -> str:
+        """Stops applying settings at boot. Needs no authorization: it only makes boot safer."""
+        self.profile.remove(card)
+        log(f"{card} boot profile removed")
+        return json.dumps({"ok": True})
+
     @Slot(QDBusMessage, result=str)
     def Confirm(self, msg: QDBusMessage) -> str:
         if not self.pending:
@@ -355,7 +446,7 @@ class Tuned(QObject):
         return json.dumps({"ok": True})
 
 
-def reset_from_baseline(runtime_dir: str) -> int:
+def reset_from_baseline(runtime_dir: str, controls: dict[str, AmdGpuControl] | None = None) -> int:
     """Crash recovery: restore whatever a previous run left changed. Safe to run when nothing was."""
     path = os.path.join(runtime_dir, "baseline.json")
     try:
@@ -366,7 +457,7 @@ def reset_from_baseline(runtime_dir: str) -> int:
     except (OSError, ValueError) as e:
         log(f"cannot read {path}: {e}")
         return 1
-    controls, status = amd_controls(), 0
+    controls, status = amd_controls() if controls is None else controls, 0
     for card, data in baseline.items():
         state = CardState.from_json(data)
         control = controls.get(card)
@@ -394,6 +485,8 @@ def main(argv: list[str] | None = None) -> int:
 
     runtime_dir = (os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "rankine-tuned")
                    if args.session else SYSTEM_RUNTIME_DIR)
+    state_dir = (os.path.join(os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state")),
+                              "rankine-tuned") if args.session else SYSTEM_STATE_DIR)
     if args.reset:
         return reset_from_baseline(runtime_dir)
 
@@ -407,7 +500,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     reset_from_baseline(runtime_dir)  # a previous run may have died without restoring
-    service = Tuned(bus, Authorizer(bus, enforce=not args.session), runtime_dir)
+    service = Tuned(bus, Authorizer(bus, enforce=not args.session), runtime_dir, state_dir=state_dir)
     signal.signal(signal.SIGTERM, lambda *_: app.quit())
     signal.signal(signal.SIGINT, lambda *_: app.quit())
     # Python only runs signal handlers between bytecodes; wake the interpreter so SIGTERM is not stuck.
@@ -415,6 +508,7 @@ def main(argv: list[str] | None = None) -> int:
     wake.timeout.connect(lambda: None)
     wake.start()
     app.aboutToQuit.connect(service.restore_all)
+    app.aboutToQuit.connect(service.profile.end_session)  # only reached on a clean stop
     bus.registerObject(OBJECT_PATH, service, QDBusConnection.ExportAllSlots)
     if not bus.registerService(BUS_NAME):
         log(f"cannot own {BUS_NAME}: {bus.lastError().message()}")

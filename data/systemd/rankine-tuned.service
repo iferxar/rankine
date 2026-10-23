@@ -9,6 +9,8 @@ ExecStart=/usr/bin/rankine-tuned
 # A clean stop restores the cards itself; this covers a crash, using the baseline left in /run.
 ExecStopPost=/usr/bin/rankine-tuned --reset
 RuntimeDirectory=rankine-tuned
+# The boot profile and whether the last session that applied it ended cleanly.
+StateDirectory=rankine-tuned
 
 # Writes go to /sys, which ProtectSystem=strict leaves writable; ProtectKernelTunables would not.
 NoNewPrivileges=yes

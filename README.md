@@ -46,7 +46,8 @@ kernel parameter or the `ryzen_smu` module. With the `rankine-tuned` service run
 the GPU power limit, performance profile, fan curve, clocks and undervolt (AMD), compares readings
 before and after each change, and runs timed stability tests. Every change asks for your password
 through polkit and reverts after 15 seconds unless you keep it. If the GPU hangs, or the service
-stops, the card goes back to its original settings. The service is optional and off by
+stops, the card goes back to its original settings. Settings that passed a stability test can be
+saved to apply at every boot; a crash or GPU hang turns that off until you turn it back on. The service is optional and off by
 default:
 
 ```sh

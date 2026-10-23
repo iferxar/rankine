@@ -1,8 +1,8 @@
 # Tuning roadmap
 
 Status: **phase 2 done**: GPU power limit, performance profile, fan curve, clocks and undervolt,
-applied through `rankine-tuned` with polkit, automatic revert and GPU hang detection. CPU tuning is
-not started. The monitor itself still never needs root.
+applied through `rankine-tuned` with polkit, automatic revert and GPU hang detection, plus a
+boot profile for settings that passed a stability test. CPU tuning is not started. The monitor itself still never needs root.
 This document describes how it could grow into a tuner for the GPU (in the spirit of MSI Afterburner)
 and the CPU (in the spirit of ClockTuner for Ryzen), and the rules it has to follow while doing so.
 
@@ -72,9 +72,11 @@ These apply to every phase and are not optional:
    idea as changing display resolution.
 2. **The helper owns the revert,** not the UI. If the UI crashes or the session dies, the watchdog
    still fires. On helper shutdown, everything returns to firmware defaults (fan back to `pwm1_enable=2`).
-3. **Nothing at boot until proven.** Settings are applied at boot only after the user marks a
-   profile stable. A boot counter records whether the last boot reached "profile applied and
-   confirmed"; if it did not, the next boot skips the profile and tells the user.
+3. **Nothing at boot until proven.** Settings are applied at boot only after the user saves them as
+   the boot profile, and settings that raise power or clocks, or undervolt, must first pass a
+   stability test. If a session that had the profile applied does not end with a clean service
+   stop (crash, freeze, reset button, power loss), or the GPU hangs, the profile is turned off and
+   the user is told why.
 4. **Undo is always one click** ("Reset to defaults"), and a CLI escape hatch exists for a broken
    graphical session: `rankine-tuned --reset`.
 5. **Log every write** to the journal with old and new values.
@@ -139,6 +141,22 @@ overclocking in the UI.
   above 80 % load, and passes otherwise.
 - Tests simulate the overdrive table's edit-then-commit behaviour and feed fake kernel log lines
   through a pipe.
+
+### Boot profile (v0.4) — done
+- **Apply at boot** saves the card's current settings (power limit, level and profile, clocks,
+  voltage offset, fan curve) to `/var/lib/rankine-tuned/profile.json` (`StateDirectory=`). Saving
+  and turning it back on use the polkit action `boot-profile`; removing it needs no authorization.
+- The UI only allows saving settings above the boot defaults, or undervolted, after they passed a
+  stability test in the same session with exactly those values. Saving is refused while a change
+  is waiting for confirmation.
+- At startup, before anything is applied, the service records the boot values (still shown as the
+  slider defaults and restored when it stops), then applies the profile.
+- Guard, in `session.json`: each start records whether the profile was applied, and only a clean
+  service stop marks the session clean. A session that applied the profile and ended any other way
+  turns the profile off before the next boot can apply it. A GPU hang turns it off at once. Either
+  way the Tuning page shows why and offers to turn it back on.
+- Tests restart the service against the fake card: clean stop and start applies the profile, a
+  killed process does not, a GPU hang turns it off, and removing it stops it from applying.
 
 ### Phase 3 · CPU, manual (v0.5)
 Requires the `ryzen_smu` kernel module (Zen 3 "Vermeer" is supported by it).

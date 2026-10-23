@@ -116,20 +116,31 @@ class ServiceTest(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp()
         self.runtime = os.path.join(self.root, "run")
+        self.state = os.path.join(self.root, "state")
         self.dev, self.hwmon = fakegpu.make(self.root)
         self.kmsg = os.path.join(self.root, "kmsg")
         os.mkfifo(self.kmsg)
+        self.start()
+
+    def start(self):
         harness = os.path.join(os.path.dirname(__file__), "tuned_harness.py")
         self.proc = subprocess.Popen([sys.executable, harness, self.root, self.runtime, str(self.CONFIRM),
-                                      "card9", self.kmsg], stdout=subprocess.PIPE, text=True)
+                                      "card9", self.kmsg, self.state], stdout=subprocess.PIPE, text=True)
         self.assertEqual(self.proc.stdout.readline().strip(), "ready")
         self.kernel = open(self.kmsg, "w")  # the harness opened the read end before printing "ready"
 
-    def tearDown(self):
+    def stop(self, crash=False):
         self.kernel.close()
-        self.proc.terminate()
+        if crash:
+            self.proc.kill()
+        else:
+            self.proc.terminate()
         self.proc.wait(5)
         self.proc.stdout.close()
+
+    def tearDown(self):
+        if self.proc.returncode is None:
+            self.stop()
         shutil.rmtree(self.root)
 
     def call(self, method, signature="", *args):
@@ -179,8 +190,7 @@ class ServiceTest(unittest.TestCase):
         time.sleep(1.3)
         self.assertEqual(fakegpu.read(f"{self.hwmon}/pwm1"), str(round(50 * 255 / 100)))
         self.assertTrue(os.path.exists(os.path.join(self.runtime, "baseline.json")))
-        self.proc.terminate()
-        self.proc.wait(5)
+        self.stop()
         self.assertEqual(fakegpu.read(f"{self.hwmon}/pwm1_enable"), "2")
         self.assertFalse(os.path.exists(os.path.join(self.runtime, "baseline.json")))
 
@@ -214,6 +224,63 @@ class ServiceTest(unittest.TestCase):
         self.kernel.flush()
         time.sleep(0.3)
         self.assertEqual(self.call("GetState")["fault_count"], 0)
+
+    def save_undervolt_profile(self):
+        """Applies -70 mV, confirms it from one connection (as the UI does) and saves it for boot."""
+        try:
+            import dbus
+        except ImportError:
+            self.skipTest("needs dbus-python for a client that can confirm")
+        iface = dbus.Interface(dbus.SessionBus().get_object(BUS_NAME, OBJECT_PATH), INTERFACE)
+        self.assertTrue(json.loads(iface.SetOverdrive("card9", '{"voltage_offset": -70}'))["ok"])
+        self.assertTrue(self.call("GetState")["cards"]["card9"]["risky"])
+        self.assertFalse(json.loads(iface.SaveBootProfile("card9"))["ok"])  # still pending
+        self.assertTrue(json.loads(iface.Confirm())["ok"])
+        self.assertTrue(json.loads(iface.SaveBootProfile("card9"))["ok"])
+        self.assertTrue(self.call("GetState")["boot_profile"]["enabled"])
+
+    def test_boot_profile_applies_after_clean_restart(self):
+        self.save_undervolt_profile()
+        self.stop()                                   # clean stop restores factory values
+        self.assertEqual(self.od(), (2509, 0))
+        self.start()                                  # next boot
+        self.assertEqual(self.od(), (2509, -70))
+        state = self.call("GetState")
+        self.assertTrue(state["boot_profile"]["enabled"])
+        self.assertTrue(state["cards"]["card9"]["changed"])
+        self.assertEqual(state["cards"]["card9"]["overdrive"]["boot"]["voltage_offset"], 0)
+        self.assertTrue(state["cards"]["card9"]["is_boot_profile"])
+
+    def test_boot_profile_skipped_after_crash(self):
+        self.save_undervolt_profile()
+        self.stop(crash=True)                         # freeze or power loss while applied
+        self.start()
+        self.assertEqual(self.od(), (2509, 0))        # restored by the crash reset, not re-applied
+        profile = self.call("GetState")["boot_profile"]
+        self.assertFalse(profile["enabled"])
+        self.assertIn("without a clean shutdown", profile["notice"])
+        self.assertTrue(self.call("EnableBootProfile")["ok"])
+        self.assertTrue(self.call("GetState")["boot_profile"]["enabled"])
+
+    def test_gpu_hang_turns_boot_profile_off(self):
+        self.save_undervolt_profile()
+        self.kernel.write("3,1,2,-;amdgpu 0000:2d:00.0: amdgpu: GPU reset begin!\n")
+        self.kernel.flush()
+        time.sleep(0.5)
+        profile = self.call("GetState")["boot_profile"]
+        self.assertFalse(profile["enabled"])
+        self.assertIn("GPU hang", profile["notice"])
+        self.stop()
+        self.start()
+        self.assertEqual(self.od(), (2509, 0))
+
+    def test_clear_boot_profile(self):
+        self.save_undervolt_profile()
+        self.assertTrue(self.call("ClearBootProfile", "s", "card9")["ok"])
+        self.assertFalse(os.path.exists(os.path.join(self.state, "profile.json")))
+        self.stop()
+        self.start()
+        self.assertEqual(self.od(), (2509, 0))
 
     def test_invalid_curve_is_refused(self):
         r = self.call("SetFanCurve", "ss", "card9", "[[40, 60], [80, 20]]")
