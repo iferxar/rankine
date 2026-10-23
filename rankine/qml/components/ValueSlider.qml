@@ -89,11 +89,13 @@ ColumnLayout {
         Layout.fillWidth: true
         from: root.from
         to: Math.max(root.to, root.from + 1)
-        stepSize: root.stepSize
+        // Snap here rather than with Slider.stepSize, which counts steps from `from` (501, 506, ...)
+        // and may never reach `to`; this gives round numbers and both ends.
+        stepSize: 0
         // Mentioning from/to re-evaluates the binding when the range arrives after the value.
         value: Math.max(from, Math.min(to, root.shown))
         enabled: !tuner.busy
-        onMoved: root.target = value
+        onMoved: root.setTarget(Math.round(value / root.stepSize) * root.stepSize)
         background: Rectangle {
             x: slider.leftPadding
             y: slider.topPadding + slider.availableHeight / 2 - height / 2
