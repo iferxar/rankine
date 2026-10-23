@@ -1,21 +1,18 @@
 """Qt front end: exposes the latest snapshot to QML and refreshes it on a timer."""
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import sys
 from pathlib import Path
 
 from PySide6.QtCore import Property, QObject, QProcess, QTimer, QUrl, Signal, Slot
-from PySide6.QtDBus import QDBusConnection, QDBusInterface, QDBusMessage
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 
 from .sensors.monitor import BaseMonitor
-from .tuned import bus as tuned_bus
-from .tuned.probe import probe
+from .tuning_client import TuningClient
 
 QML_DIR = Path(__file__).parent / "qml"
 ICON = Path(__file__).parent / "icons" / "rankine.svg"
@@ -24,7 +21,6 @@ ICON = Path(__file__).parent / "icons" / "rankine.svg"
 class Backend(QObject):
     dataChanged = Signal()
     detectStateChanged = Signal()
-    tuningChanged = Signal()
 
     def __init__(self, monitor: BaseMonitor, interval: float):
         super().__init__()
@@ -35,7 +31,6 @@ class Backend(QObject):
         self._timer.start(int(interval * 1000))
         self._detect_proc: QProcess | None = None
         self._detect_state = ""
-        self._tuning: dict = {}
 
     def _tick(self):
         self._data = self._monitor.sample()
@@ -86,32 +81,6 @@ class Backend(QObject):
         else:
             self._set_detect_state(error[-1] if error else f"exit code {code}")
 
-    # Tuning capabilities come from rankine-tuned when it runs; otherwise the same probe runs
-    # in-process, so the page still explains what is available and how to set up the rest.
-    @Property("QVariantMap", notify=tuningChanged)
-    def tuning(self):
-        return self._tuning
-
-    @Slot()
-    def refreshTuning(self):
-        session = tuned_bus.use_session_bus()
-        bus = QDBusConnection.sessionBus() if session else QDBusConnection.systemBus()
-        iface = QDBusInterface(tuned_bus.BUS_NAME, tuned_bus.OBJECT_PATH, tuned_bus.INTERFACE, bus)
-        iface.setTimeout(3000)
-        reply = iface.call("Probe") if iface.isValid() else None
-        if reply is not None and reply.type() == QDBusMessage.MessageType.ReplyMessage:
-            report = json.loads(reply.arguments()[0])
-            report["helper"] = {"running": True, "bus": "session" if session else "system"}
-        else:
-            report = probe()
-            unit_installed = any(os.path.exists(f"{d}/{tuned_bus.UNIT}")
-                                 for d in ("/usr/lib/systemd/system", "/etc/systemd/system"))
-            report["helper"] = {"running": False, "installed": unit_installed,
-                                "error": reply.errorMessage() if reply is not None
-                                else iface.lastError().message()}
-        self._tuning = report
-        self.tuningChanged.emit()
-
 
 def run(monitor: BaseMonitor, interval: float) -> int:
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
@@ -123,7 +92,9 @@ def run(monitor: BaseMonitor, interval: float) -> int:
 
     backend = Backend(monitor, interval)
     engine = QQmlApplicationEngine()
+    tuner = TuningClient(backend)
     engine.rootContext().setContextProperty("backend", backend)
+    engine.rootContext().setContextProperty("tuner", tuner)
     engine.load(QUrl.fromLocalFile(str(QML_DIR / "Main.qml")))
     if not engine.rootObjects():
         return 1

@@ -6,9 +6,11 @@ Documentation=https://github.com/iferxar/rankine/blob/main/docs/TUNING.md
 Type=dbus
 BusName=io.github.iferxar.Rankine.Tuned
 ExecStart=/usr/bin/rankine-tuned
+# A clean stop restores the cards itself; this covers a crash, using the baseline left in /run.
+ExecStopPost=/usr/bin/rankine-tuned --reset
+RuntimeDirectory=rankine-tuned
 
-# Read-only for now. /sys stays writable under ProtectSystem=strict, which later phases need,
-# so ProtectKernelTunables is deliberately not set.
+# Writes go to /sys, which ProtectSystem=strict leaves writable; ProtectKernelTunables would not.
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 ProtectSystem=strict

@@ -16,7 +16,7 @@ ApplicationWindow {
     font.family: Theme.fontFamily
 
     property int page: 0  // 0 = monitor, 1 = tuning
-    onPageChanged: if (page === 1) backend.refreshTuning()
+    onPageChanged: tuner.setActive(page === 1)
 
     readonly property var d: backend.data
     readonly property var cpu: d.cpu
@@ -440,5 +440,12 @@ ApplicationWindow {
         }
 
         TuningPage {}
+    }
+
+    PendingToast {
+        pending: tuner.state.pending || null
+        anchors { bottom: parent.bottom; horizontalCenter: parent.horizontalCenter; bottomMargin: 18 }
+        width: Math.min(680, win.width - 32)
+        z: 10
     }
 }

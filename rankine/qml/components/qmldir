@@ -8,3 +8,9 @@ BarRow 1.0 BarRow.qml
 PillButton 1.0 PillButton.qml
 Facet 1.0 Facet.qml
 FeatureRow 1.0 FeatureRow.qml
+ControlTile 1.0 ControlTile.qml
+PowerControl 1.0 PowerControl.qml
+PerformanceControl 1.0 PerformanceControl.qml
+FanCurveEditor 1.0 FanCurveEditor.qml
+PendingToast 1.0 PendingToast.qml
+ComparisonTile 1.0 ComparisonTile.qml

@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import glob
 import os
-import re
 import shutil
 
 from .. import __version__
 from ..sensors.gpu import pci_name
 from ..sensors.hwmon import read_int, read_text
+from .gpu import drm_devices, parse_profiles
 
 OVERDRIVE_BIT = 0x4000  # PP_OVERDRIVE_MASK in amdgpu's ppfeaturemask
 OVERDRIVE_MASK = "amdgpu.ppfeaturemask=0xffffffff"
@@ -82,13 +82,8 @@ def kernel_param_steps(param: str) -> tuple[str, str]:
 # ── GPU ──────────────────────────────────────────────────────────────────────
 
 def _profiles(dev: str) -> tuple[list[str], str | None]:
-    text = read_text(f"{dev}/pp_power_profile_mode") or ""
-    names, active = [], None
-    for m in re.finditer(r"^\s*\d+\s+([A-Z0-9_]+)\s*(\*?)\s*:", text, re.M):
-        names.append(m.group(1))
-        if m.group(2):
-            active = m.group(1)
-    return names, active
+    profiles, active = parse_profiles(read_text(f"{dev}/pp_power_profile_mode") or "")
+    return [n for _, n in profiles], dict(profiles).get(active)
 
 
 def _od_ranges(text: str) -> dict[str, str]:
@@ -164,17 +159,9 @@ def _amdgpu_features(dev: str, hwmon: str | None) -> list[dict]:
 
 
 def _gpus() -> list[dict]:
-    gpus, seen = [], set()
-    for card in sorted(glob.glob("/sys/class/drm/card[0-9]*")):
-        if "-" in os.path.basename(card):
-            continue  # connectors such as card1-DP-1
-        dev = os.path.realpath(f"{card}/device")
-        driver = os.path.basename(os.path.realpath(f"{dev}/driver")) if os.path.exists(f"{dev}/driver") else None
-        if dev in seen or driver in (None, "simpledrm", "virtio-pci"):
-            continue
-        seen.add(dev)
+    gpus = []
+    for card, dev, driver, hwmon in drm_devices():
         name = read_text(f"{dev}/product_name") or pci_name(dev) or driver
-        hwmon = next(iter(sorted(glob.glob(f"{dev}/hwmon/hwmon*"))), None)
         if driver == "amdgpu":
             features = _amdgpu_features(dev, hwmon)
         elif driver == "nvidia":
@@ -183,8 +170,7 @@ def _gpus() -> list[dict]:
         else:
             features = [_feature("gpu", "GPU tuning", "", "unsupported",
                                  f"No tuning support for the {driver} driver.")]
-        gpus.append({"name": name, "card": os.path.basename(card), "driver": driver,
-                     "features": features})
+        gpus.append({"name": name, "card": card, "driver": driver, "features": features})
     return gpus
 
 

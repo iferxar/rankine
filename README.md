@@ -41,14 +41,19 @@ CPU voltage on boards whose Super I/O chip doesn't label its inputs (e.g. `nct66
 Rankine is growing into a GPU and CPU tuner (power limit, fan curve, undervolt, Curve Optimizer).
 The plan and the safety rules it follows are in [docs/TUNING.md](docs/TUNING.md).
 
-So far the **Tuning** tab is read-only: it shows what this machine supports and what each feature
-still needs, such as a kernel parameter or the `ryzen_smu` module. Tuning will go through a small
-root service, `rankine-tuned`, which is optional and off by default:
+The **Tuning** tab shows what this machine supports and what each feature still needs, such as a
+kernel parameter or the `ryzen_smu` module. With the `rankine-tuned` service running, it also sets
+the GPU power limit, performance profile and fan curve (AMD), and compares readings before and after
+each change. Every change asks for your password through polkit and reverts after 15 seconds unless
+you keep it; stopping the service puts the card back as it was. The service is optional and off by
+default:
 
 ```sh
 sudo systemctl enable --now rankine-tuned.service   # packaged install
 sudo scripts/install-tuned.sh                       # from a checkout, then enable as above
 ```
+
+Tests: `python -m unittest` (the service tests need a D-Bus session bus).
 
 ## License
 

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- Checked by rankine-tuned before every change. Confirming, reverting and restoring
+     original settings need no authorization: they only undo. -->
+<policyconfig>
+  <vendor>Rankine</vendor>
+  <vendor_url>https://github.com/iferxar/rankine</vendor_url>
+
+  <action id="io.github.iferxar.Rankine.Tuned.gpu-power">
+    <description>Change the GPU power limit</description>
+    <message>Authentication is required to change the GPU power limit.</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <action id="io.github.iferxar.Rankine.Tuned.gpu-profile">
+    <description>Change the GPU performance level and power profile</description>
+    <message>Authentication is required to change the GPU performance profile.</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <action id="io.github.iferxar.Rankine.Tuned.gpu-fan">
+    <description>Control the GPU fan</description>
+    <message>Authentication is required to control the GPU fan.</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+</policyconfig>

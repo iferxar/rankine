@@ -1,1 +1,1 @@
-"""Privileged tuning helper (rankine-tuned) and the capability probe it serves."""
+"""Privileged tuning helper (rankine-tuned): capability probe, GPU controls, polkit checks."""

@@ -7,7 +7,7 @@ pkgdesc="Glanceable hardware sensor monitor for CPU, GPU, memory, fans and drive
 arch=('any')
 url="https://github.com/iferxar/rankine"
 license=('GPL-3.0-or-later')
-depends=('python' 'pyside6')
+depends=('python' 'pyside6' 'polkit')
 makedepends=('git' 'python-build' 'python-installer' 'python-setuptools' 'python-wheel')
 optdepends=('pciutils: GPU model names'
             'dmidecode: DIMM speed and voltage'
@@ -39,4 +39,5 @@ package() {
   install -Dm644 packaging/rankine-rapl.conf -t "$pkgdir/usr/share/rankine"
   install -Dm644 data/systemd/rankine-tuned.service -t "$pkgdir/usr/lib/systemd/system"
   install -Dm644 data/dbus/io.github.iferxar.Rankine.Tuned.conf -t "$pkgdir/usr/share/dbus-1/system.d"
+  install -Dm644 data/polkit/io.github.iferxar.Rankine.Tuned.policy -t "$pkgdir/usr/share/polkit-1/actions"
 }

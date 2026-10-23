@@ -12,7 +12,8 @@ from .hwmon import discover
 from .system import DriveReader, FanReader, MemoryReader, save_dimm_cache
 
 HISTORY_LEN = 120
-HISTORY_KEYS = ("cpu.temp", "cpu.load", "gpu.temp", "gpu.load", "mem.percent")
+HISTORY_KEYS = ("cpu.temp", "cpu.load", "gpu.temp", "gpu.load", "mem.percent",
+                "gpu.power", "gpu.mhz", "gpu.hotspot", "gpu.fan_rpm")
 
 
 class Stats:

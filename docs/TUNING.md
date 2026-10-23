@@ -1,6 +1,7 @@
 # Tuning roadmap
 
-Status: **phase 0 done** (helper service and read-only Tuning page); nothing changes hardware yet.
+Status: **phase 1 done**: GPU power limit, performance profile and fan curve, applied through
+`rankine-tuned` with polkit and automatic revert. CPU tuning and GPU overdrive are not started.
 Rankine still only reads sensors, and the monitor never needs root.
 This document describes how it could grow into a tuner for the GPU (in the spirit of MSI Afterburner)
 and the CPU (in the spirit of ClockTuner for Ryzen), and the rules it has to follow while doing so.
@@ -50,8 +51,8 @@ the user to add `amdgpu.ppfeaturemask=0xffffffff` to the kernel command line; CP
 
 - **Privileged helper `rankine-tuned`.** A small Python system service activated over the system
   D-Bus (`io.github.iferxar.Rankine.Tuned`). The UI never runs as root. Each method that changes
-  hardware maps to one polkit action (`io.github.iferxar.Rankine.Tuned.gpu-power`, `….gpu-clocks`,
-  `….gpu-fan`, `….cpu-curve`), so the user can allow some and not others, and admins can lock them down.
+  hardware maps to one polkit action (`io.github.iferxar.Rankine.Tuned.gpu-power`, `….gpu-profile`,
+  `….gpu-fan`; later `….gpu-clocks`, `….cpu-curve`), so the user can allow some and not others, and admins can lock them down.
 - **Allowlist, not passthrough.** The helper accepts typed requests ("set power cap to 245 W on
   card1"), checks them against the ranges the driver itself advertises, and writes the files. It
   never takes a path or a raw string from the UI.
@@ -90,19 +91,33 @@ These apply to every phase and are not optional:
   running, the UI runs the same probe in-process, so the page works either way.
 - Packaging: the helper ships in the same package but stays disabled until the user enables the unit.
   From a checkout, `sudo scripts/install-tuned.sh` copies the code to a root-owned directory first.
-- The polkit policy is deferred to phase 1, together with the first method that needs it.
 - Development without root: `python -m rankine.tuned --session`, then run the UI with
   `RANKINE_TUNED_BUS=session`.
 
-### Phase 1 · GPU basics (v0.3)
+### Phase 1 · GPU basics (v0.3) — done
 - **Power limit** slider within `power1_cap_min…max`.
-- **Performance level / power profile** selector.
-- **Fan curve** editor: temperature → PWM points, with hysteresis and a minimum step interval so the
-  fan does not hunt. The helper runs the curve (RDNA2 has no firmware fan-curve table; that is RDNA3+)
-  and falls back to `pwm1_enable=2` whenever it stops.
-- **Before/after view.** Capture N seconds of history under the old setting and N under the new one,
-  and show average power, temperature, clock and fan side by side. The history buffers the dashboard
-  already keeps are the starting point.
+- **Performance level** (auto, low, high) and **power profile** selector; the custom profile is left
+  out until overdrive.
+- **Fan curve** editor: up to 8 points, temperature never decreasing and speed never dropping as it
+  rises. The helper runs the curve once a second on the edge temperature (RDNA2 has no firmware
+  fan-curve table; that is RDNA3+), speeds up at once and slows down only after a 3 °C drop, goes to
+  100 % if the hotspot reaches 100 °C, and hands the fan back to firmware (`pwm1_enable=2`) whenever
+  it stops or loses the temperature reading.
+- **Before/after view.** Averages of the 20 s before a change and the 20 s after it: power,
+  temperature, hotspot, clock, fan and load.
+- How the rules are implemented:
+  - D-Bus methods `SetPowerLimit`, `SetPerformance`, `SetFanCurve` each check their polkit action
+    (`auth_admin_keep` for the active session) with `pkcheck` against the caller's pid and start time.
+  - Every change starts a 15 s countdown in the helper; `Confirm` (only from the same client) keeps
+    it, `Revert` or the timeout restores the values from before the change. Several changes inside
+    one countdown are kept or reverted together.
+  - Before the first change to a card, its original values go to `/run/rankine-tuned/baseline.json`.
+    Stopping the service restores them; `ExecStopPost=rankine-tuned --reset` restores them after a
+    crash. `Reset` puts one card back from the UI ("Restore original settings").
+  - Nothing is applied at boot yet, so rule 3 holds trivially: profiles that survive a reboot come
+    after the stability checks of phase 2.
+- Tests: `python -m unittest` runs the fan curve and control logic, plus the whole service on the
+  session bus against a fake amdgpu sysfs tree (`tests/`).
 
 ### Phase 2 · GPU overdrive (v0.4)
 Requires `amdgpu.ppfeaturemask=0xffffffff`. The UI explains how to add it for the user's bootloader
