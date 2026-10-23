@@ -10,6 +10,17 @@ Rectangle {
     property var colors: [Theme.teal, Theme.cyan]
     property bool spinner: false
     property real spinSpeed: 0  // revolutions per second for the fan icon
+    // When set, the number is eased between readings instead of jumping; valueText is the fallback.
+    property real value: NaN
+    property string unit
+    property int decimals: 0
+    readonly property int easeMs: 900  // a bit under the refresh interval, so motion stays continuous
+
+    Behavior on spinSpeed { NumberAnimation { duration: root.easeMs; easing.type: Easing.InOutSine } }
+    Behavior on value {
+        enabled: !isNaN(root.value)
+        NumberAnimation { duration: root.easeMs; easing.type: Easing.InOutSine }
+    }
 
     color: Theme.tile
     radius: 10
@@ -21,14 +32,15 @@ Rectangle {
         anchors { left: parent.left; right: parent.right; top: parent.top; margins: 10; leftMargin: 12 }
         spacing: 8
         Facet {
+            id: icon
             visible: root.spinner
             size: 12
-            opacity: root.spinSpeed > 0 ? 1 : 0.35
-            RotationAnimator on rotation {
-                from: 0; to: 360
-                duration: root.spinSpeed > 0 ? 1000 / root.spinSpeed : 1000
-                loops: Animation.Infinite
-                running: root.spinSpeed > 0
+            opacity: root.spinSpeed > 0.05 ? 1 : 0.35
+            Behavior on opacity { NumberAnimation { duration: root.easeMs } }
+            // Integrating the speed each frame keeps the angle continuous when the RPM changes.
+            FrameAnimation {
+                running: root.spinner && root.spinSpeed > 0.001
+                onTriggered: icon.rotation = (icon.rotation + 360 * root.spinSpeed * frameTime) % 360
             }
         }
         Text {
@@ -41,7 +53,7 @@ Rectangle {
             elide: Text.ElideRight
         }
         Text {
-            text: root.valueText
+            text: isNaN(root.value) ? root.valueText : root.value.toFixed(root.decimals) + " " + root.unit
             color: Theme.text
             font.family: Theme.fontFamily
             font.pixelSize: 13
@@ -73,7 +85,7 @@ Rectangle {
                 GradientStop { position: 0.0; color: root.colors[0] }
                 GradientStop { position: 1.0; color: root.colors[1] }
             }
-            Behavior on width { NumberAnimation { duration: 400; easing.type: Easing.OutCubic } }
+            Behavior on width { NumberAnimation { duration: root.easeMs; easing.type: Easing.InOutSine } }
         }
         // Glowing bead at the end of the bar.
         Rectangle {

@@ -371,14 +371,19 @@ ApplicationWindow {
                         Layout.fillWidth: true
                     }
                     Repeater {
-                        model: win.d.fans
+                        // A count model keeps the rows alive between ticks, so they animate
+                        // instead of being rebuilt every second.
+                        model: win.d.fans.length
                         delegate: BarRow {
-                            required property var modelData
+                            required property int index
+                            readonly property var fan: win.d.fans[index] || {}
                             spinner: true
-                            spinSpeed: (modelData.rpm || 0) / 1200
-                            label: modelData.name
-                            valueText: modelData.text
-                            frac: modelData.frac
+                            spinSpeed: (fan.rpm || 0) / 1200
+                            label: fan.name || ""
+                            valueText: fan.text || ""
+                            value: fan.rpm != null ? fan.rpm : NaN
+                            unit: "RPM"
+                            frac: fan.frac || 0
                         }
                     }
 
@@ -397,13 +402,14 @@ ApplicationWindow {
                         }
                     }
                     Repeater {
-                        model: win.d.drives
+                        model: win.d.drives.length
                         delegate: BarRow {
-                            required property var modelData
-                            label: modelData.name
-                            valueText: Theme.fmt(modelData.temp, 0, "°C")
-                            colors: Theme.tempGradient(modelData.temp)
-                            frac: modelData.temp != null ? (modelData.temp - 20) / ((modelData.max || 80) - 20) : 0
+                            required property int index
+                            readonly property var drive: win.d.drives[index] || {}
+                            label: drive.name || ""
+                            valueText: Theme.fmt(drive.temp, 0, "°C")
+                            colors: Theme.tempGradient(drive.temp)
+                            frac: drive.temp != null ? (drive.temp - 20) / ((drive.max || 80) - 20) : 0
                         }
                     }
                 }
