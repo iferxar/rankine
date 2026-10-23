@@ -14,6 +14,7 @@ from .tuned.probe import probe
 CALL_TIMEOUT_MS = 120_000  # long enough for the user to type a password in the polkit dialog
 COMPARE_SAMPLES = 20       # seconds of readings before and after a change
 COMPARE_KEYS = ("gpu.power", "gpu.temp", "gpu.hotspot", "gpu.mhz", "gpu.fan_rpm", "gpu.load")
+LOADED_PERCENT = 80        # GPU load that counts as "under test" during a stability run
 
 
 class TuningClient(QObject):
@@ -22,6 +23,7 @@ class TuningClient(QObject):
     busyChanged = Signal()
     messageChanged = Signal()
     comparisonChanged = Signal()
+    stabilityChanged = Signal()
 
     def __init__(self, backend):
         super().__init__()
@@ -35,6 +37,7 @@ class TuningClient(QObject):
         self._message = ""
         self._comparison: dict = {}
         self._after: dict[str, list[float]] | None = None
+        self._stability: dict = {}
         self._active = False
         self._polling = False
         self._watchers: set[QDBusPendingCallWatcher] = set()
@@ -60,6 +63,10 @@ class TuningClient(QObject):
     @Property("QVariantMap", notify=comparisonChanged)
     def comparison(self):
         return self._comparison
+
+    @Property("QVariantMap", notify=stabilityChanged)
+    def stability(self):
+        return self._stability
 
     def _set_busy(self, busy: bool):
         self._busy = busy
@@ -133,8 +140,11 @@ class TuningClient(QObject):
         self._call("GetState", [], done, timeout=3000)
 
     def _tick(self):
-        if self._helper_running and (self._active or self._state.get("pending")):
+        if self._helper_running and (self._active or self._state.get("pending")
+                                     or self._stability.get("running")):
             self._poll()
+        if self._stability.get("running"):
+            self._stability_tick()
         if self._after is not None:
             snap = self._backend.data
             for key in COMPARE_KEYS:
@@ -186,6 +196,10 @@ class TuningClient(QObject):
     def setFanCurve(self, card: str, points):
         self._change("SetFanCurve", [card, json.dumps([[float(t), float(p)] for t, p in points])])
 
+    @Slot(str, "QVariantMap")
+    def setOverdrive(self, card: str, values):
+        self._change("SetOverdrive", [card, json.dumps({k: int(v) for k, v in values.items()})])
+
     @Slot(str)
     def setFanAuto(self, card: str):
         self._change("SetFanCurve", [card, ""])
@@ -208,6 +222,44 @@ class TuningClient(QObject):
     @Slot(str)
     def reset(self, card: str):
         self._simple("Reset", [card])
+
+    # ── stability run: the user runs their own GPU load; the helper reports hangs from the kernel log ──
+    @Slot(int)
+    def startStability(self, minutes: int):
+        self._stability = {"running": True, "duration": minutes * 60, "elapsed": 0, "loaded": 0,
+                           "faults_at_start": self._state.get("fault_count", 0), "faults": 0,
+                           "verdict": "", "watching": bool(self._state.get("fault_watch"))}
+        self.stabilityChanged.emit()
+
+    @Slot()
+    def stopStability(self):
+        if self._stability.get("running"):
+            self._finish_stability(stopped=True)
+
+    def _stability_tick(self):
+        st = self._stability
+        st["elapsed"] += 1
+        load = (self._backend.data.get("gpu") or {}).get("load")
+        if isinstance(load, (int, float)) and load >= LOADED_PERCENT:
+            st["loaded"] += 1
+        st["faults"] = self._state.get("fault_count", 0) - st["faults_at_start"]
+        if st["faults"] > 0 or st["elapsed"] >= st["duration"]:
+            self._finish_stability(stopped=False)
+        else:
+            self.stabilityChanged.emit()
+
+    def _finish_stability(self, stopped: bool):
+        st = self._stability
+        st["running"] = False
+        if st["faults"] > 0:
+            st["verdict"] = "failed"
+        elif stopped:
+            st["verdict"] = "stopped"
+        elif st["loaded"] < st["duration"] / 2:
+            st["verdict"] = "inconclusive"
+        else:
+            st["verdict"] = "passed"
+        self.stabilityChanged.emit()
 
     @Slot()
     def clearComparison(self):

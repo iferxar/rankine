@@ -4,7 +4,9 @@ Safety rules (docs/TUNING.md):
 - every change must be confirmed within CONFIRM_SECONDS or it is reverted, by this service, not the UI;
 - what the card looked like before Rankine touched it is kept in a baseline file and restored when
   the service stops, or by `rankine-tuned --reset` (ExecStopPost) if it crashed;
-- nothing is applied at boot.
+- nothing is applied at boot;
+- a GPU hang or reset in the kernel log puts every changed card back to its original clocks, voltage
+  and power (the fan curve stays: it only adds cooling).
 """
 from __future__ import annotations
 
@@ -21,12 +23,14 @@ from PySide6.QtDBus import QDBusConnection, QDBusMessage
 from .. import __version__
 from .bus import BUS_NAME, INTERFACE, OBJECT_PATH
 from .fan import FanCurve
-from .gpu import FAN_AUTO, AmdGpuControl, TuningError, amd_controls
+from .faults import KMSG, FaultWatcher
+from .gpu import FAN_AUTO, VOLTAGE_OFFSET_RANGE, AmdGpuControl, TuningError, amd_controls
 from .polkit import Authorizer
 from .probe import probe
 
 CONFIRM_SECONDS = 15
 FAN_INTERVAL_MS = 1000
+MAX_FAULTS = 20
 SYSTEM_RUNTIME_DIR = "/run/rankine-tuned"
 _FAN_MODE_NAMES = {0: "full", 1: "manual", 2: "auto"}
 
@@ -52,7 +56,7 @@ class CardState:
 @ClassInfo({"D-Bus Interface": INTERFACE})
 class Tuned(QObject):
     def __init__(self, bus: QDBusConnection, authorizer: Authorizer, runtime_dir: str,
-                 controls: dict[str, AmdGpuControl] | None = None):
+                 controls: dict[str, AmdGpuControl] | None = None, kmsg: str = KMSG):
         super().__init__()
         self.bus = bus
         self.auth = authorizer
@@ -66,6 +70,13 @@ class Tuned(QObject):
         self.revert_timer.timeout.connect(self._expire)
         self.fan_timer = QTimer(self, interval=FAN_INTERVAL_MS)
         self.fan_timer.timeout.connect(self._drive_fans)
+        # Values when the service started, i.e. at boot: the "default" the UI offers to go back to.
+        self.boot = {card: c.snapshot() for card, c in self.controls.items()}
+        self.faults: list[dict] = []
+        self.fault_count = 0
+        self.watcher = FaultWatcher(self._on_fault, kmsg)
+        if not self.watcher.available:
+            log(f"GPU hang detection off: {self.watcher.error}")
 
     # ── state helpers ──
     def _state(self, card: str) -> CardState:
@@ -165,6 +176,20 @@ class Tuned(QObject):
         self.revert_timer.stop()
         return error
 
+    def _on_fault(self, text: str) -> None:
+        self.fault_count += 1
+        self.faults = (self.faults + [{"time": time.time(), "text": text}])[-MAX_FAULTS:]
+        log(f"GPU fault in the kernel log: {text}")
+        if self.pending:
+            self.pending = None
+            self.revert_timer.stop()
+        for card, original in self.baseline.items():
+            try:
+                self.controls[card].restore(original.snap)
+                log(f"{card} clocks, voltage and power restored after the fault")
+            except TuningError as e:
+                log(f"{card} restore after the fault failed: {e}")
+
     # ── change pipeline: authorize, snapshot, apply, start the confirmation countdown ──
     def _change(self, msg: QDBusMessage, action: str, card: str, description: str, apply) -> None:
         msg.setDelayedReply(True)
@@ -220,8 +245,12 @@ class Tuned(QObject):
             profiles, active = c.profiles()
             curve = self.fans.get(card)
             edge, junction = c.temps()
+            od = c.overdrive()
+            if od:
+                od["voltage_range"] = list(VOLTAGE_OFFSET_RANGE)
+                od["boot"] = self.boot[card].get("od")
             cards[card] = {
-                "power": c.power(), "level": c.level(),
+                "power": c.power(), "level": c.level(), "overdrive": od,
                 "profiles": [[i, n] for i, n in profiles if n != "CUSTOM"], "profile": active,
                 "fan": {"mode": "curve" if curve else _FAN_MODE_NAMES.get(c.fan_mode(), "unknown"),
                         "curve": [list(p) for p in curve.points] if curve else None,
@@ -229,7 +258,9 @@ class Tuned(QObject):
                 "temp": edge, "junction": junction, "changed": card in self.baseline,
             }
         return json.dumps({"cards": cards, "pending": self._pending_json(msg.service()),
-                           "confirm_seconds": CONFIRM_SECONDS})
+                           "confirm_seconds": CONFIRM_SECONDS,
+                           "faults": self.faults, "fault_count": self.fault_count,
+                           "fault_watch": self.watcher.available})
 
     @Slot(str, float, QDBusMessage, result=str)
     def SetPowerLimit(self, card: str, watts: float, msg: QDBusMessage) -> str:
@@ -249,6 +280,22 @@ class Tuned(QObject):
         parts = ([f"level {level}"] if level else []) + ([f"profile {names.get(profile, profile)}"]
                                                           if profile >= 0 else [])
         self._change(msg, "gpu-profile", card, ", ".join(parts) or "performance unchanged", apply)
+        return ""
+
+    @Slot(str, str, QDBusMessage, result=str)
+    def SetOverdrive(self, card: str, values_json: str, msg: QDBusMessage) -> str:
+        """values_json: any of {"sclk_max": MHz, "mclk_max": MHz, "voltage_offset": mV}."""
+        try:
+            values = {k: int(v) for k, v in json.loads(values_json).items()
+                      if k in ("sclk_max", "mclk_max", "voltage_offset")}
+        except (ValueError, TypeError, AttributeError):
+            msg.setDelayedReply(True)
+            self._reply(msg, {"ok": False, "error": "invalid overdrive request"})
+            return ""
+        names = {"sclk_max": ("core clock", "MHz"), "mclk_max": ("memory clock", "MHz"),
+                 "voltage_offset": ("voltage offset", "mV")}
+        description = ", ".join(f"{names[k][0]} {v} {names[k][1]}" for k, v in values.items()) or "no change"
+        self._change(msg, "gpu-clocks", card, description, lambda c: c.set_overdrive(**values))
         return ""
 
     @Slot(str, str, QDBusMessage, result=str)

@@ -43,9 +43,10 @@ The plan and the safety rules it follows are in [docs/TUNING.md](docs/TUNING.md)
 
 The **Tuning** tab shows what this machine supports and what each feature still needs, such as a
 kernel parameter or the `ryzen_smu` module. With the `rankine-tuned` service running, it also sets
-the GPU power limit, performance profile and fan curve (AMD), and compares readings before and after
-each change. Every change asks for your password through polkit and reverts after 15 seconds unless
-you keep it; stopping the service puts the card back as it was. The service is optional and off by
+the GPU power limit, performance profile, fan curve, clocks and undervolt (AMD), compares readings
+before and after each change, and runs timed stability tests. Every change asks for your password
+through polkit and reverts after 15 seconds unless you keep it. If the GPU hangs, or the service
+stops, the card goes back to its original settings. The service is optional and off by
 default:
 
 ```sh

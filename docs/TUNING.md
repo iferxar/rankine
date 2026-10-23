@@ -1,8 +1,8 @@
 # Tuning roadmap
 
-Status: **phase 1 done**: GPU power limit, performance profile and fan curve, applied through
-`rankine-tuned` with polkit and automatic revert. CPU tuning and GPU overdrive are not started.
-Rankine still only reads sensors, and the monitor never needs root.
+Status: **phase 2 done**: GPU power limit, performance profile, fan curve, clocks and undervolt,
+applied through `rankine-tuned` with polkit, automatic revert and GPU hang detection. CPU tuning is
+not started. The monitor itself still never needs root.
 This document describes how it could grow into a tuner for the GPU (in the spirit of MSI Afterburner)
 and the CPU (in the spirit of ClockTuner for Ryzen), and the rules it has to follow while doing so.
 
@@ -18,7 +18,7 @@ and the CPU (in the spirit of ClockTuner for Ryzen), and the rules it has to fol
 
 - Memory timing or BIOS-level overclocking. Those belong in firmware setup.
 - Bypassing vendor limits (raising power caps beyond `power1_cap_max`, unlocking voltage above what
-  the driver accepts).
+  the driver accepts). Rankine also refuses positive voltage offsets: only undervolting is offered.
 - Anything enabled by default. Every tuning feature is opt-in and the monitor keeps working
   without it.
 
@@ -119,15 +119,26 @@ These apply to every phase and are not optional:
 - Tests: `python -m unittest` runs the fan curve and control logic, plus the whole service on the
   session bus against a fake amdgpu sysfs tree (`tests/`).
 
-### Phase 2 · GPU overdrive (v0.4)
+### Phase 2 · GPU overdrive (v0.4) — done
 Requires `amdgpu.ppfeaturemask=0xffffffff`. The UI explains how to add it for the user's bootloader
-and that it should be removed if tuning is abandoned.
-- Parse `pp_od_clk_voltage`: it lists the ranges the card accepts (`OD_RANGE`), so limits come from the
-  driver, not from a table in Rankine.
-- Core clock min/max, memory clock max, voltage offset (undervolt) when the card exposes it. The
-  write sequence is the driver's own: set values, then `c` to commit; `r` restores defaults.
-- **Stability check:** run a GPU load the user chooses (any Vulkan benchmark) while Rankine watches
-  the kernel log for `amdgpu` ring timeouts and GPU resets. A reset means the step failed.
+and that it should be removed if tuning is abandoned. With it, the driver also widens the power
+limit (an RX 6800 XT goes from 237–264 W to 237–303 W); raising it above the default is flagged as
+overclocking in the UI.
+- `pp_od_clk_voltage` is parsed for the current values and the ranges the card accepts (`OD_RANGE`),
+  so limits come from the driver, not from a table in Rankine. Example (RX 6800 XT):
+  core 500–3000 MHz, memory 674–1075 MHz, plus `OD_VDDGFX_OFFSET`.
+- `SetOverdrive` (polkit action `gpu-clocks`) edits the max core clock, max memory clock and voltage
+  offset, then commits with `c`, as the driver expects. The driver gives no range for the voltage
+  offset, so Rankine allows −150 to 0 mV.
+- The values the service saw at startup, which is boot, are shown as defaults on each slider.
+- **GPU hang detection:** the service reads `/dev/kmsg` (hence `CAP_SYSLOG` in the unit) for `amdgpu`
+  ring timeouts and GPU resets. On one, it drops any unconfirmed change and puts every changed card
+  back to its original clocks, voltage and power; the fan curve stays, since it only adds cooling.
+- **Stability test:** the user runs their own load (a game or benchmark) and starts a 5, 15 or
+  30 minute test. It fails on a GPU hang, is inconclusive if the GPU spent less than half the time
+  above 80 % load, and passes otherwise.
+- Tests simulate the overdrive table's edit-then-commit behaviour and feed fake kernel log lines
+  through a pipe.
 
 ### Phase 3 · CPU, manual (v0.5)
 Requires the `ryzen_smu` kernel module (Zen 3 "Vermeer" is supported by it).
@@ -161,8 +172,8 @@ Expect a full run to take hours; it must be pausable and resumable.
 | Version | Delivers | Needs from the user |
 |---|---|---|
 | 0.2 | helper + read-only Tuning page | enable the service |
-| 0.3 | GPU power limit, profiles, fan curve, before/after | polkit approval |
-| 0.4 | GPU clocks and undervolt, GPU stability check | kernel parameter |
+| 0.3 | GPU power limit, profiles, fan curve, before/after (done) | polkit approval |
+| 0.4 | GPU clocks and undervolt, GPU stability check (done) | kernel parameter |
 | 0.5 | CPU PM table readings, manual PBO / Curve Optimizer | `ryzen_smu` from the AUR |
 | 0.6+ | CPU auto-tuner (experimental) | time, and tolerance for test reboots |
 

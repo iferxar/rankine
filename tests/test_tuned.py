@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from rankine.tuned.bus import BUS_NAME, INTERFACE, OBJECT_PATH
 from rankine.tuned.fan import FanCurve, validate
-from rankine.tuned.gpu import AmdGpuControl, TuningError
+from rankine.tuned.gpu import AmdGpuControl, TuningError, parse_overdrive
 from tests import fakegpu
 
 
@@ -73,6 +73,42 @@ class GpuControlTest(unittest.TestCase):
         self.assertEqual(fakegpu.read(f"{self.dev}/power_dpm_force_performance_level"), "auto")
 
 
+class OverdriveTest(unittest.TestCase):
+    REAL = ("OD_SCLK:\n0: 500Mhz\n1: 2509Mhz\nOD_MCLK:\n0: 97Mhz\n1: 1000MHz\nOD_RANGE:\n"
+            "SCLK:     500Mhz       3000Mhz\nMCLK:     674Mhz       1075Mhz\nOD_VDDGFX_OFFSET:\n0mV\n")
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.dev, self.hwmon = fakegpu.make(self.root)
+        self.c = fakegpu.fake_control("card9", self.dev, self.hwmon)
+
+    def tearDown(self):
+        shutil.rmtree(self.root)
+
+    def test_parses_rdna2_table(self):
+        self.assertEqual(parse_overdrive(self.REAL), {
+            "sclk": [500, 2509], "mclk": [97, 1000], "voltage_offset": 0,
+            "range": {"sclk": [500, 3000], "mclk": [674, 1075]}})
+
+    def test_commits_edits_together(self):
+        self.c.set_overdrive(sclk_max=2400, voltage_offset=-50)
+        od = self.c.overdrive()
+        self.assertEqual((od["sclk"][1], od["mclk"][1], od["voltage_offset"]), (2400, 1000, -50))
+
+    def test_rejects_out_of_range(self):
+        for kwargs in ({"sclk_max": 3100}, {"sclk_max": 400}, {"mclk_max": 1100},
+                       {"voltage_offset": -200}, {"voltage_offset": 10}):
+            with self.assertRaises(TuningError, msg=kwargs):
+                self.c.set_overdrive(**kwargs)
+        self.assertEqual(self.c.overdrive()["sclk"][1], 2509)
+
+    def test_restore_puts_overdrive_back(self):
+        snap = self.c.snapshot()
+        self.c.set_overdrive(sclk_max=2300, mclk_max=1050, voltage_offset=-75)
+        self.c.restore(snap)
+        self.assertEqual(self.c.snapshot(), snap)
+
+
 @unittest.skipUnless(shutil.which("busctl") and os.environ.get("DBUS_SESSION_BUS_ADDRESS"), "needs a session bus")
 class ServiceTest(unittest.TestCase):
     CONFIRM = 1.5
@@ -81,12 +117,16 @@ class ServiceTest(unittest.TestCase):
         self.root = tempfile.mkdtemp()
         self.runtime = os.path.join(self.root, "run")
         self.dev, self.hwmon = fakegpu.make(self.root)
+        self.kmsg = os.path.join(self.root, "kmsg")
+        os.mkfifo(self.kmsg)
         harness = os.path.join(os.path.dirname(__file__), "tuned_harness.py")
-        self.proc = subprocess.Popen([sys.executable, harness, self.root, self.runtime, str(self.CONFIRM)],
-                                     stdout=subprocess.PIPE, text=True)
+        self.proc = subprocess.Popen([sys.executable, harness, self.root, self.runtime, str(self.CONFIRM),
+                                      "card9", self.kmsg], stdout=subprocess.PIPE, text=True)
         self.assertEqual(self.proc.stdout.readline().strip(), "ready")
+        self.kernel = open(self.kmsg, "w")  # the harness opened the read end before printing "ready"
 
     def tearDown(self):
+        self.kernel.close()
         self.proc.terminate()
         self.proc.wait(5)
         self.proc.stdout.close()
@@ -143,6 +183,37 @@ class ServiceTest(unittest.TestCase):
         self.proc.wait(5)
         self.assertEqual(fakegpu.read(f"{self.hwmon}/pwm1_enable"), "2")
         self.assertFalse(os.path.exists(os.path.join(self.runtime, "baseline.json")))
+
+    def od(self):
+        od = parse_overdrive(fakegpu.read(f"{self.dev}/pp_od_clk_voltage"))
+        return od["sclk"][1], od["voltage_offset"]
+
+    def test_overdrive_reverts_unless_confirmed(self):
+        r = self.call("SetOverdrive", "ss", "card9", '{"sclk_max": 2400, "voltage_offset": -50}')
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(self.od(), (2400, -50))
+        boot = self.call("GetState")["cards"]["card9"]["overdrive"]["boot"]
+        self.assertEqual(boot, {"sclk_max": 2509, "mclk_max": 1000, "voltage_offset": 0})
+        time.sleep(self.CONFIRM + 0.7)
+        self.assertEqual(self.od(), (2509, 0))
+
+    def test_gpu_hang_restores_original_values(self):
+        self.call("SetOverdrive", "ss", "card9", '{"voltage_offset": -100}')
+        self.call("SetPowerLimit", "sd", "card9", 240)
+        self.kernel.write("3,1234,567,-;amdgpu 0000:2d:00.0: amdgpu: ring gfx_0.0.0 timeout, signaled seq=1\n")
+        self.kernel.flush()
+        time.sleep(0.5)
+        state = self.call("GetState")
+        self.assertEqual(state["fault_count"], 1)
+        self.assertIsNone(state["pending"])
+        self.assertEqual(self.od(), (2509, 0))
+        self.assertEqual(self.cap(), "264000000")
+
+    def test_unrelated_kernel_messages_are_ignored(self):
+        self.kernel.write("6,1,2,-;usb 1-1: new high-speed USB device\n")
+        self.kernel.flush()
+        time.sleep(0.3)
+        self.assertEqual(self.call("GetState")["fault_count"], 0)
 
     def test_invalid_curve_is_refused(self):
         r = self.call("SetFanCurve", "ss", "card9", "[[40, 60], [80, 20]]")

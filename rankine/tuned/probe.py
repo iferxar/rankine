@@ -12,7 +12,7 @@ import shutil
 from .. import __version__
 from ..sensors.gpu import pci_name
 from ..sensors.hwmon import read_int, read_text
-from .gpu import drm_devices, parse_profiles
+from .gpu import drm_devices, parse_overdrive, parse_profiles
 
 OVERDRIVE_BIT = 0x4000  # PP_OVERDRIVE_MASK in amdgpu's ppfeaturemask
 OVERDRIVE_MASK = "amdgpu.ppfeaturemask=0xffffffff"
@@ -86,18 +86,6 @@ def _profiles(dev: str) -> tuple[list[str], str | None]:
     return [n for _, n in profiles], dict(profiles).get(active)
 
 
-def _od_ranges(text: str) -> dict[str, str]:
-    """OD_RANGE section of pp_od_clk_voltage, e.g. {'SCLK': '500Mhz 2800Mhz'}."""
-    ranges, inside = {}, False
-    for line in text.splitlines():
-        if line.startswith("OD_"):
-            inside = line.startswith("OD_RANGE")
-        elif inside and ":" in line:
-            key, value = line.split(":", 1)
-            ranges[key.strip()] = " ".join(value.split())
-    return ranges
-
-
 def _amdgpu_features(dev: str, hwmon: str | None) -> list[dict]:
     out = []
 
@@ -139,11 +127,18 @@ def _amdgpu_features(dev: str, hwmon: str | None) -> list[dict]:
         out.append(_feature("gpu-fan", "Fan curve", "0.3", "unsupported",
                             "The driver does not expose fan PWM control for this card."))
 
-    od = read_text(f"{dev}/pp_od_clk_voltage")
+    text = read_text(f"{dev}/pp_od_clk_voltage")
+    od = parse_overdrive(text) if text else None
     if od is not None:
-        ranges = _od_ranges(od)
-        detail = " · ".join(f"{k} {v}" for k, v in ranges.items()) or "Overdrive table present"
-        out.append(_feature("gpu-overdrive", "Clocks and undervolt", "0.4", "ready", detail))
+        parts = []
+        for key, name in (("sclk", "Core"), ("mclk", "memory")):
+            if od.get(key) and key in od["range"]:
+                lo, hi = od["range"][key]
+                parts.append(f"{name} {od[key][-1]} MHz (driver range {lo}–{hi})")
+        if "voltage_offset" in od:
+            parts.append(f"voltage offset {od['voltage_offset']} mV")
+        out.append(_feature("gpu-overdrive", "Clocks and undervolt", "0.4", "ready",
+                            " · ".join(parts) or "Overdrive table present"))
     else:
         mask = _hex("/sys/module/amdgpu/parameters/ppfeaturemask")
         if mask is not None and not mask & OVERDRIVE_BIT:

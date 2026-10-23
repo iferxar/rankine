@@ -67,6 +67,15 @@ ControlTile {
             horizontalAlignment: Text.AlignRight
         }
     }
+    Text {
+        visible: Math.round(root.shown) > Math.round(root.power.default)
+        text: "Above the card's default limit: this is overclocking. Raise it in steps and run a stability test."
+        color: Theme.amber
+        font.family: Theme.fontFamily
+        font.pixelSize: 11
+        wrapMode: Text.WordWrap
+        Layout.fillWidth: true
+    }
     RowLayout {
         Layout.fillWidth: true
         spacing: 8

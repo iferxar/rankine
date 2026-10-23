@@ -29,6 +29,7 @@ def make(root: str) -> tuple[str, str]:
     for path, text in files.items():
         with open(path, "w") as f:
             f.write(text + "\n")
+    make_overdrive(dev)
     return dev, hwmon
 
 
@@ -40,3 +41,43 @@ def read(path: str) -> str:
 def write(path: str, text) -> None:
     with open(path, "w") as f:
         f.write(f"{text}\n")
+
+
+OD_BOOT = {"sclk": [500, 2509], "mclk": [97, 1000], "vo": 0}
+
+
+def render_od(od: dict) -> str:
+    return (f"OD_SCLK:\n0: {od['sclk'][0]}Mhz\n1: {od['sclk'][1]}Mhz\n"
+            f"OD_MCLK:\n0: {od['mclk'][0]}Mhz\n1: {od['mclk'][1]}MHz\n"
+            "OD_RANGE:\nSCLK:     500Mhz       3000Mhz\nMCLK:     674Mhz       1075Mhz\n"
+            f"OD_VDDGFX_OFFSET:\n{od['vo']}mV\n")
+
+
+def make_overdrive(dev: str) -> None:
+    write(f"{dev}/pp_od_clk_voltage", render_od(OD_BOOT))
+
+
+def fake_control(card: str, dev: str, hwmon: str):
+    """An AmdGpuControl whose overdrive writes behave like the driver's: edits, then 'c' commits."""
+    from rankine.tuned.gpu import AmdGpuControl
+
+    class FakeAmdGpu(AmdGpuControl):
+        staged = None
+
+        def _od_write(self, command: str) -> None:
+            od = self.overdrive()
+            current = {"sclk": od["sclk"], "mclk": od["mclk"], "vo": od["voltage_offset"]}
+            staged = self.staged or {k: list(v) if isinstance(v, list) else v for k, v in current.items()}
+            parts = command.split()
+            if parts[0] == "s":
+                staged["sclk"][int(parts[1])] = int(parts[2])
+            elif parts[0] == "m":
+                staged["mclk"][int(parts[1])] = int(parts[2])
+            elif parts[0] == "vo":
+                staged["vo"] = int(parts[1])
+            elif parts[0] == "c":
+                write(f"{self.dev}/pp_od_clk_voltage", render_od(staged))
+                staged = None
+            self.staged = staged
+
+    return FakeAmdGpu(card, dev, hwmon)

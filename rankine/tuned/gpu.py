@@ -1,4 +1,5 @@
-"""amdgpu controls written by rankine-tuned: power limit, performance level and profile, fan PWM.
+"""amdgpu controls written by rankine-tuned: power limit, performance level and profile, fan PWM,
+and the overdrive table (clocks and voltage offset).
 
 Every value is validated against what the driver itself advertises before it is written.
 """
@@ -12,6 +13,8 @@ from ..sensors.hwmon import read_int, read_text
 
 LEVELS = ("auto", "low", "high")  # "manual" and the profile_* levels belong to overdrive and profiling
 FAN_AUTO, FAN_MANUAL = 2, 1
+# The driver does not advertise a voltage offset range; Rankine only allows undervolting, within reason.
+VOLTAGE_OFFSET_RANGE = (-150, 0)
 
 
 def drm_devices():
@@ -37,6 +40,28 @@ def parse_profiles(text: str) -> tuple[list[tuple[int, str]], int | None]:
         if m.group(3):
             active = int(m.group(1))
     return profiles, active
+
+
+def parse_overdrive(text: str) -> dict | None:
+    """pp_od_clk_voltage -> {"sclk": [min, max], "mclk": [min, max], "voltage_offset": mV,
+    "range": {"sclk": [lo, hi], "mclk": [lo, hi]}}, with whatever sections the card has."""
+    od: dict = {"range": {}}
+    section = None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("OD_"):
+            section = line.rstrip(":")
+            continue
+        mhz = [int(v) for v in re.findall(r"(\d+)\s*mhz", line, re.I)]
+        if section in ("OD_SCLK", "OD_MCLK") and mhz:
+            od.setdefault(section[3:].lower(), []).append(mhz[0])
+        elif section == "OD_VDDGFX_OFFSET":
+            m = re.match(r"(-?\d+)\s*mv", line, re.I)
+            if m:
+                od["voltage_offset"] = int(m.group(1))
+        elif section == "OD_RANGE" and ":" in line and len(mhz) == 2:
+            od["range"][line.split(":")[0].strip().lower()] = mhz
+    return od if ("sclk" in od or "mclk" in od) else None
 
 
 class TuningError(Exception):
@@ -93,11 +118,19 @@ class AmdGpuControl:
         return (edge / 1000 if edge is not None else None,
                 junction / 1000 if junction is not None else None)
 
+    def overdrive(self) -> dict | None:
+        text = read_text(f"{self.dev}/pp_od_clk_voltage")
+        return parse_overdrive(text) if text else None
+
     def snapshot(self) -> dict:
         """Raw values that restore() can put back."""
         _, profile = self.profiles()
+        od = self.overdrive()
         return {"power_uw": read_int(f"{self.hwmon}/power1_cap"), "level": self.level(),
-                "profile": profile}
+                "profile": profile,
+                "od": {"sclk_max": od["sclk"][-1] if od.get("sclk") else None,
+                       "mclk_max": od["mclk"][-1] if od.get("mclk") else None,
+                       "voltage_offset": od.get("voltage_offset")} if od else None}
 
     # ── writes ──
     def set_power(self, watts: float) -> None:
@@ -119,6 +152,44 @@ class AmdGpuControl:
         if index not in names or names[index] == "CUSTOM":
             raise TuningError(f"unknown power profile {index}")
         _write(f"{self.dev}/pp_power_profile_mode", index)
+
+    def _od_write(self, command: str) -> None:
+        """One edit to the overdrive table; the driver takes a single command per write."""
+        _write(f"{self.dev}/pp_od_clk_voltage", command)
+
+    def set_overdrive(self, sclk_max: int | None = None, mclk_max: int | None = None,
+                      voltage_offset: int | None = None) -> None:
+        """Edits the given values (None leaves one as is) and commits them in one go."""
+        od = self.overdrive()
+        if od is None:
+            raise TuningError("overdrive is not enabled for this card")
+        commands = []
+        if sclk_max is not None:
+            lo, hi = od["range"].get("sclk", [None, None])
+            if "sclk" not in od or lo is None:
+                raise TuningError("this card does not allow core clock changes")
+            if not max(lo, od["sclk"][0] + 1) <= sclk_max <= hi:
+                raise TuningError(f"core clock must be between {max(lo, od['sclk'][0] + 1)} and {hi} MHz")
+            commands.append(f"s {len(od['sclk']) - 1} {sclk_max}")
+        if mclk_max is not None:
+            lo, hi = od["range"].get("mclk", [None, None])
+            if "mclk" not in od or lo is None:
+                raise TuningError("this card does not allow memory clock changes")
+            if not lo <= mclk_max <= hi:
+                raise TuningError(f"memory clock must be between {lo} and {hi} MHz")
+            commands.append(f"m {len(od['mclk']) - 1} {mclk_max}")
+        if voltage_offset is not None:
+            lo, hi = VOLTAGE_OFFSET_RANGE
+            if "voltage_offset" not in od:
+                raise TuningError("this card does not allow a voltage offset")
+            if not lo <= voltage_offset <= hi:
+                raise TuningError(f"voltage offset must be between {lo} and {hi} mV")
+            commands.append(f"vo {voltage_offset}")
+        if not commands:
+            return
+        for command in commands:
+            self._od_write(command)
+        self._od_write("c")
 
     def set_fan_auto(self) -> None:
         _write(f"{self.hwmon}/pwm1_enable", FAN_AUTO)
@@ -144,6 +215,12 @@ class AmdGpuControl:
         for path, value in writes:
             try:
                 _write(path, value)
+            except TuningError as e:
+                errors.append(str(e))
+        want, have = snap.get("od"), now.get("od")
+        if want and have and want != have:
+            try:
+                self.set_overdrive(**{k: v for k, v in want.items() if v is not None and v != have.get(k)})
             except TuningError as e:
                 errors.append(str(e))
         if errors:

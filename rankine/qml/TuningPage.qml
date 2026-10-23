@@ -68,6 +68,17 @@ ScrollView {
                     wrapMode: Text.WordWrap
                     Layout.fillWidth: true
                 }
+                Text {
+                    readonly property var last: (tuner.state.faults || []).slice(-1)[0]
+                    visible: !!last
+                    text: last ? "Last GPU hang, " + new Date(last.time * 1000).toLocaleTimeString(Qt.locale(), "HH:mm:ss")
+                                 + ": " + last.text + ". Original clocks, voltage and power were restored." : ""
+                    color: Theme.red
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 12
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
                 ComparisonTile {
                     visible: !!tuner.comparison.what
                     comparison: tuner.comparison
@@ -104,10 +115,21 @@ ScrollView {
                         fan: gpuCard.live ? gpuCard.live.fan : ({ mode: "auto", curve: null, percent: null })
                         temp: gpuCard.live ? gpuCard.live.temp : null
                     }
+                    OverdriveControl {
+                        visible: !!gpuCard.live && !!gpuCard.live.overdrive
+                        card: gpuCard.modelData.card
+                        od: gpuCard.live && gpuCard.live.overdrive ? gpuCard.live.overdrive : ({})
+                    }
+                    StabilityTile {
+                        visible: !!gpuCard.live
+                        stability: tuner.stability
+                        watching: !!tuner.state.fault_watch
+                    }
                     // Without the helper, or for what it cannot control yet, explain instead.
                     Repeater {
                         model: gpuCard.modelData.features.filter(f => !gpuCard.live
-                            || ["gpu-power", "gpu-profile", "gpu-fan"].indexOf(f.id) < 0)
+                            || ["gpu-power", "gpu-profile", "gpu-fan"].indexOf(f.id) < 0
+                               && !(f.id === "gpu-overdrive" && gpuCard.live.overdrive))
                         delegate: FeatureRow { required property var modelData; feature: modelData }
                     }
                     RowLayout {

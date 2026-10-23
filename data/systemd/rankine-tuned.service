@@ -12,7 +12,8 @@ RuntimeDirectory=rankine-tuned
 
 # Writes go to /sys, which ProtectSystem=strict leaves writable; ProtectKernelTunables would not.
 NoNewPrivileges=yes
-CapabilityBoundingSet=
+# Reading /dev/kmsg for GPU hangs needs CAP_SYSLOG when kernel.dmesg_restrict=1; nothing else is kept.
+CapabilityBoundingSet=CAP_SYSLOG
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
