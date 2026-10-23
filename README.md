@@ -36,6 +36,11 @@ Installs `~/.local/bin/rankine`, a desktop entry and the icon for the current us
 
 CPU voltage on boards whose Super I/O chip doesn't label its inputs (e.g. `nct6687`) is a best guess and marked *est.*; compare it with your BIOS.
 
+## Roadmap
+
+Rankine may grow into a GPU and CPU tuner (power limit, fan curve, undervolt, Curve Optimizer).
+The plan and the safety rules it follows are in [docs/TUNING.md](docs/TUNING.md). Nothing of it is implemented yet.
+
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
