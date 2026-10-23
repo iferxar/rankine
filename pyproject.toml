@@ -14,9 +14,10 @@ dependencies = ["PySide6>=6.6"]
 
 [project.scripts]
 rankine = "rankine.__main__:main"
+rankine-tuned = "rankine.tuned.service:main"
 
 [tool.setuptools]
-packages = ["rankine", "rankine.sensors"]
+packages = ["rankine", "rankine.sensors", "rankine.tuned"]
 
 [tool.setuptools.dynamic]
 version = { attr = "rankine.__version__" }

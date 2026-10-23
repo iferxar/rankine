@@ -1,6 +1,7 @@
 # Tuning roadmap
 
-Status: **plan, nothing implemented yet.** Rankine today only reads sensors and never needs root.
+Status: **phase 0 done** (helper service and read-only Tuning page); nothing changes hardware yet.
+Rankine still only reads sensors, and the monitor never needs root.
 This document describes how it could grow into a tuner for the GPU (in the spirit of MSI Afterburner)
 and the CPU (in the spirit of ClockTuner for Ryzen), and the rules it has to follow while doing so.
 
@@ -48,9 +49,9 @@ the user to add `amdgpu.ppfeaturemask=0xffffffff` to the kernel command line; CP
 ```
 
 - **Privileged helper `rankine-tuned`.** A small Python system service activated over the system
-  D-Bus. The UI never runs as root. Each method maps to one polkit action
-  (`org.rankine.tune.gpu-power`, `…gpu-clocks`, `…gpu-fan`, `…cpu-curve`), so the user can allow some
-  and not others, and admins can lock them down.
+  D-Bus (`io.github.iferxar.Rankine.Tuned`). The UI never runs as root. Each method that changes
+  hardware maps to one polkit action (`io.github.iferxar.Rankine.Tuned.gpu-power`, `….gpu-clocks`,
+  `….gpu-fan`, `….cpu-curve`), so the user can allow some and not others, and admins can lock them down.
 - **Allowlist, not passthrough.** The helper accepts typed requests ("set power cap to 245 W on
   card1"), checks them against the ranges the driver itself advertises, and writes the files. It
   never takes a path or a raw string from the UI.
@@ -81,11 +82,17 @@ These apply to every phase and are not optional:
 
 ## Phases
 
-### Phase 0 · Groundwork (v0.2)
-- `rankine-tuned` skeleton: D-Bus service, polkit policy, systemd unit, capability probe.
-- Read-only **Tuning** page in the UI listing what is available and what is missing, with the
-  exact steps to enable it (kernel parameter, AUR package).
+### Phase 0 · Groundwork (v0.2) — done
+- `rankine-tuned` (`rankine/tuned/`): system D-Bus service with `Version()` and `Probe()`, systemd
+  unit (`data/systemd/`), bus policy (`data/dbus/`), capability probe (`rankine/tuned/probe.py`).
+- Read-only **Tuning** page listing what is available and what is missing, with the exact steps to
+  enable it (kernel parameter for the detected bootloader, AUR package). When the helper is not
+  running, the UI runs the same probe in-process, so the page works either way.
 - Packaging: the helper ships in the same package but stays disabled until the user enables the unit.
+  From a checkout, `sudo scripts/install-tuned.sh` copies the code to a root-owned directory first.
+- The polkit policy is deferred to phase 1, together with the first method that needs it.
+- Development without root: `python -m rankine.tuned --session`, then run the UI with
+  `RANKINE_TUNED_BUS=session`.
 
 ### Phase 1 · GPU basics (v0.3)
 - **Power limit** slider within `power1_cap_min…max`.

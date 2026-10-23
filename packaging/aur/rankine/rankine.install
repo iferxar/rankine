@@ -4,5 +4,8 @@ post_install() {
 ==> root-only since Linux 5.10 (CVE-2020-8694). To allow it for all users:
 ==>   sudo cp /usr/share/rankine/rankine-rapl.conf /etc/tmpfiles.d/
 ==>   sudo systemd-tmpfiles --create /etc/tmpfiles.d/rankine-rapl.conf
+==>
+==> The Tuning page works without the rankine-tuned helper; to start it:
+==>   sudo systemctl enable --now rankine-tuned.service
 MSG
 }

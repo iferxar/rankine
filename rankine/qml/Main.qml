@@ -15,6 +15,9 @@ ApplicationWindow {
     color: Theme.bg
     font.family: Theme.fontFamily
 
+    property int page: 0  // 0 = monitor, 1 = tuning
+    onPageChanged: if (page === 1) backend.refreshTuning()
+
     readonly property var d: backend.data
     readonly property var cpu: d.cpu
     readonly property var gpu: d.gpu
@@ -85,9 +88,21 @@ ApplicationWindow {
                 font.weight: Font.Bold
                 font.letterSpacing: 2.5
             }
+            Item { implicitWidth: 14 }
+            Repeater {
+                model: ["Monitor", "Tuning"]
+                delegate: PillButton {
+                    required property string modelData
+                    required property int index
+                    text: modelData
+                    outlined: win.page === index
+                    accent: win.page === index ? Theme.mint : Theme.muted
+                    onClicked: win.page = index
+                }
+            }
             Text {
                 Layout.fillWidth: true
-                Layout.leftMargin: 24
+                Layout.leftMargin: 16
                 text: win.cpu.name + (win.gpu ? "  ·  " + win.gpu.name : "")
                 color: Theme.muted
                 font.family: Theme.fontFamily
@@ -99,321 +114,331 @@ ApplicationWindow {
                 outlined: true
                 accent: win.statusColor(win.d.status)
             }
-            PillButton { text: "Reset Stats"; onClicked: backend.resetStats() }
+            PillButton {
+                visible: win.page === 0
+                text: "Reset Stats"
+                onClicked: backend.resetStats()
+            }
         }
     }
 
-    ScrollView {
-        id: scroll
+    StackLayout {
         anchors.fill: parent
-        contentWidth: availableWidth
+        currentIndex: win.page
 
-        Item {
-            width: scroll.availableWidth
-            implicitHeight: grid.implicitHeight + 32
+        ScrollView {
+            id: scroll
+            contentWidth: availableWidth
 
-            GridLayout {
-                id: grid
-                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 16 }
-                columns: width > 1000 ? 2 : 1
-                columnSpacing: 16
-                rowSpacing: 16
-                uniformCellWidths: true
+            Item {
+                width: scroll.availableWidth
+                implicitHeight: grid.implicitHeight + 32
 
-                // ── Processor ──────────────────────────────────────────────
-                Card {
-                    title: "Processor"
-                    subtitle: win.cpu.name
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.alignment: Qt.AlignTop
+                GridLayout {
+                    id: grid
+                    anchors { left: parent.left; right: parent.right; top: parent.top; margins: 16 }
+                    columns: width > 1000 ? 2 : 1
+                    columnSpacing: 16
+                    rowSpacing: 16
+                    uniformCellWidths: true
 
-                    RowLayout {
+                    // ── Processor ──────────────────────────────────────────────
+                    Card {
+                        title: "Processor"
+                        subtitle: win.cpu.name
                         Layout.fillWidth: true
-                        spacing: 12
-                        ArcGauge {
-                            Layout.preferredWidth: 140; Layout.preferredHeight: 150
-                            value: win.cpu.temp ?? 0; minValue: 20; maxValue: 100
-                            colors: Theme.tempGradient(win.cpu.temp)
-                            valueText: Theme.fmt(win.cpu.temp, 0, "°C")
-                            label: "Temp"; coloredLabel: true
-                            footer: Theme.range(win.st("cpu.temp"), 0, "°C")
-                        }
-                        ArcGauge {
-                            Layout.preferredWidth: 120; Layout.preferredHeight: 150
-                            thickness: 9
-                            value: win.cpu.load ?? 0
-                            colors: Theme.loadGradient(win.cpu.load)
-                            valueText: Theme.fmt(win.cpu.load, 0, "%")
-                            label: "Load"
-                            footer: Theme.range(win.st("cpu.load"), 0, "%")
-                        }
-                        GridLayout {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            columns: 2; columnSpacing: 8; rowSpacing: 8
-                            Tile {
-                                title: "Clock"; value: Theme.fmt(win.cpu.mhz, 0, " MHz")
-                                footer: Theme.range(win.st("cpu.mhz"), 0, "", true)
-                            }
-                            Tile {
-                                title: "Power"; value: Theme.fmt(win.cpu.power, 1, " W")
-                                footer: win.cpu.power_hint || Theme.range(win.st("cpu.power"), 1, "", true)
-                            }
-                            Tile {
-                                title: "Voltage"; value: Theme.fmt(win.cpu.voltage, 3, " V")
-                                estimated: win.cpu.voltage_estimated
-                                footer: Theme.range(win.st("cpu.voltage"), 3, "", true)
-                            }
-                            Tile {
-                                title: "Current"; value: Theme.fmt(win.cpu.current, 1, " A")
-                                estimated: true
-                                footer: win.cpu.power_hint ? "needs CPU power" : Theme.range(win.st("cpu.current"), 1, "", true)
-                            }
-                        }
-                    }
+                        Layout.fillHeight: true
+                        Layout.alignment: Qt.AlignTop
 
-                    Sparkline {
-                        labelA: "Temp (°C)"; labelB: "Usage (%)"
-                        seriesA: win.d.history["cpu.temp"]; minA: 20; maxA: 100
-                        seriesB: win.d.history["cpu.load"]
-                    }
-
-                    CoreGrid { cores: win.cpu.cores }
-                }
-
-                // ── Graphics ───────────────────────────────────────────────
-                Card {
-                    title: "Graphics"
-                    subtitle: win.gpu ? win.gpu.name : "No supported GPU found"
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.alignment: Qt.AlignTop
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 12
-                        ArcGauge {
-                            Layout.preferredWidth: 140; Layout.preferredHeight: 150
-                            value: win.g.temp ?? 0; minValue: 20; maxValue: 100
-                            colors: Theme.tempGradient(win.g.temp)
-                            valueText: Theme.fmt(win.g.temp, 0, "°C")
-                            label: "Temp"; coloredLabel: true
-                            footer: win.g.hotspot != null
-                                    ? "Max " + Theme.fmt((win.st("gpu.temp") || {}).max, 0, "°C") + " · Hotspot " + Theme.fmt(win.g.hotspot, 0, "°C")
-                                    : Theme.range(win.st("gpu.temp"), 0, "°C")
-                        }
-                        ArcGauge {
-                            Layout.preferredWidth: 120; Layout.preferredHeight: 150
-                            thickness: 9
-                            value: win.g.load ?? 0
-                            colors: Theme.loadGradient(win.g.load)
-                            valueText: Theme.fmt(win.g.load, 0, "%")
-                            label: "Core"
-                            footer: Theme.range(win.st("gpu.load"), 0, "%")
-                        }
-                        GridLayout {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            columns: 2; columnSpacing: 8; rowSpacing: 8
-                            Tile {
-                                title: "Clock"; value: Theme.fmt(win.gpu ? win.gpu.mhz : null, 0, " MHz")
-                                footer: Theme.range(win.st("gpu.mhz"), 0, "", true)
-                            }
-                            Tile {
-                                title: "Power"; value: Theme.fmt(win.gpu ? win.gpu.power : null, 1, " W")
-                                footer: Theme.range(win.st("gpu.power"), 1, "", true)
-                            }
-                            Tile {
-                                title: "Voltage"; value: Theme.fmt(win.gpu ? win.gpu.voltage : null, 3, " V")
-                                footer: Theme.range(win.st("gpu.voltage"), 3, "", true)
-                            }
-                            Tile {
-                                title: "Current"; value: Theme.fmt(win.gpu ? win.gpu.current : null, 1, " A")
-                                estimated: true
-                                footer: Theme.range(win.st("gpu.current"), 1, "", true)
-                            }
-                        }
-                    }
-
-                    Sparkline {
-                        labelA: "Temp (°C)"; labelB: "Core (%)"
-                        seriesA: win.d.history["gpu.temp"]; minA: 20; maxA: 100
-                        seriesB: win.d.history["gpu.load"]
-                    }
-
-                    BarRow {
-                        visible: win.gpu && win.gpu.vram_total != null
-                        label: "VRAM USAGE"
-                        valueText: win.gpu ? Theme.fmt(win.gpu.vram_used, 1, "") + " / " + Theme.fmt(win.gpu.vram_total, 1, " GB") : ""
-                        frac: win.gpu && win.gpu.vram_total ? win.gpu.vram_used / win.gpu.vram_total : 0
-                        accentText: Theme.fmt(frac * 100, 0, " %")
-                    }
-                }
-
-                // ── Memory ─────────────────────────────────────────────────
-                Card {
-                    title: "Memory"
-                    subtitle: Theme.fmt(win.mem.used, 1, "") + " / " + Theme.fmt(win.mem.total, 1, " GB") + "   " + Theme.fmt(win.mem.percent, 0, " %")
-                    subtitleColor: Theme.cyan
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.alignment: Qt.AlignTop
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        implicitHeight: 8; radius: 4
-                        color: Theme.track
-                        Rectangle {
-                            height: parent.height; radius: parent.radius
-                            width: parent.width * (win.mem.percent ?? 0) / 100
-                            gradient: Gradient {
-                                orientation: Gradient.Horizontal
-                                GradientStop { position: 0.0; color: Theme.teal }
-                                GradientStop { position: 1.0; color: Theme.cyan }
-                            }
-                            Behavior on width { NumberAnimation { duration: 400 } }
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-                        // Configured values (BIOS) when detected, otherwise the module's rated profile from SPD.
-                        Tile {
-                            readonly property string rated: win.mem.rated_clock
-                                ? win.mem.rated_profile + " " + win.mem.rated_clock + (win.mem.rated_cl ? " CL" + win.mem.rated_cl : "")
-                                : ""
-                            title: "Clock"
-                            value: Theme.fmt(win.mem.clock ?? win.mem.rated_clock, 0, " MT/s")
-                            badge: win.mem.dimm_detected || !win.mem.rated_clock ? "" : win.mem.rated_profile
-                            footer: win.mem.dimm_detected ? "Configured" + (rated ? " · rated " + rated : "")
-                                  : rated ? "Module rating, not confirmed" : "no SPD data"
-                        }
-                        Tile {
-                            title: "Voltage"
-                            value: Theme.fmt(win.mem.voltage ?? win.mem.rated_voltage, 2, " V")
-                            badge: win.mem.dimm_detected || win.mem.rated_voltage == null ? "" : win.mem.rated_profile
-                            // SMBIOS often keeps reporting the JEDEC 1.2 V even with XMP applied.
-                            footer: win.mem.dimm_detected
-                                  ? "As reported by BIOS" + (win.mem.rated_voltage != null && Math.abs(win.mem.rated_voltage - win.mem.voltage) > 0.005
-                                                             ? " · " + win.mem.rated_profile + " " + Theme.fmt(win.mem.rated_voltage, 2, " V") : "")
-                                  : win.mem.rated_voltage != null ? "Module rating, not confirmed" : "needs Detect"
-                        }
-                        Tile {
-                            visible: win.mem.temp != null
-                            title: "Temperature"; value: Theme.fmt(win.mem.temp, 1, "°C")
-                            footer: Theme.range(win.st("mem.temp"), 1, "", true)
-                        }
-                        Tile {
-                            visible: win.mem.temp == null
-                            title: "Modules"; value: win.mem.modules || "N/A"
-                            footer: win.mem.part ? win.mem.part + " · " + win.mem.mem_type : "no SPD data"
-                        }
-                        Tile {
-                            title: "Swap"; value: Theme.fmt(win.mem.swap_used, 1, "") + " / " + Theme.fmt(win.mem.swap_total, 0, " GB")
-                            footer: Theme.range(win.st("mem.swap_used"), 2, " GB")
-                        }
-                    }
-
-                    Rectangle {
-                        visible: !win.mem.dimm_detected
-                        Layout.fillWidth: true
-                        implicitHeight: detectRow.implicitHeight + 16
-                        radius: 10
-                        color: Qt.rgba(0, 0.67, 0.53, 0.08)
-                        border.color: "#14524b"
                         RowLayout {
-                            id: detectRow
-                            anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 10; leftMargin: 12 }
-                            spacing: 10
-                            Facet { size: 12 }
-                            Text {
+                            Layout.fillWidth: true
+                            spacing: 12
+                            ArcGauge {
+                                Layout.preferredWidth: 140; Layout.preferredHeight: 150
+                                value: win.cpu.temp ?? 0; minValue: 20; maxValue: 100
+                                colors: Theme.tempGradient(win.cpu.temp)
+                                valueText: Theme.fmt(win.cpu.temp, 0, "°C")
+                                label: "Temp"; coloredLabel: true
+                                footer: Theme.range(win.st("cpu.temp"), 0, "°C")
+                            }
+                            ArcGauge {
+                                Layout.preferredWidth: 120; Layout.preferredHeight: 150
+                                thickness: 9
+                                value: win.cpu.load ?? 0
+                                colors: Theme.loadGradient(win.cpu.load)
+                                valueText: Theme.fmt(win.cpu.load, 0, "%")
+                                label: "Load"
+                                footer: Theme.range(win.st("cpu.load"), 0, "%")
+                            }
+                            GridLayout {
                                 Layout.fillWidth: true
-                                text: backend.detectState && backend.detectState !== "running"
-                                      ? "Could not read the BIOS memory settings (" + backend.detectState + "). From a terminal: sudo dmidecode -t 17 | rankine --import-dimm"
-                                      : "The speed and voltage the BIOS actually applied are in the SMBIOS tables, readable only as admin. Detect once and Rankine remembers it."
-                                color: Theme.muted
-                                font.family: Theme.fontFamily
-                                font.pixelSize: 11
-                                wrapMode: Text.WordWrap
-                            }
-                            PillButton {
-                                text: backend.detectState === "running" ? "Detecting…" : "Detect"
-                                outlined: true
-                                accent: Theme.mint
-                                onClicked: backend.detectDimms()
+                                Layout.fillHeight: true
+                                columns: 2; columnSpacing: 8; rowSpacing: 8
+                                Tile {
+                                    title: "Clock"; value: Theme.fmt(win.cpu.mhz, 0, " MHz")
+                                    footer: Theme.range(win.st("cpu.mhz"), 0, "", true)
+                                }
+                                Tile {
+                                    title: "Power"; value: Theme.fmt(win.cpu.power, 1, " W")
+                                    footer: win.cpu.power_hint || Theme.range(win.st("cpu.power"), 1, "", true)
+                                }
+                                Tile {
+                                    title: "Voltage"; value: Theme.fmt(win.cpu.voltage, 3, " V")
+                                    estimated: win.cpu.voltage_estimated
+                                    footer: Theme.range(win.st("cpu.voltage"), 3, "", true)
+                                }
+                                Tile {
+                                    title: "Current"; value: Theme.fmt(win.cpu.current, 1, " A")
+                                    estimated: true
+                                    footer: win.cpu.power_hint ? "needs CPU power" : Theme.range(win.st("cpu.current"), 1, "", true)
+                                }
                             }
                         }
+
+                        Sparkline {
+                            labelA: "Temp (°C)"; labelB: "Usage (%)"
+                            seriesA: win.d.history["cpu.temp"]; minA: 20; maxA: 100
+                            seriesB: win.d.history["cpu.load"]
+                        }
+
+                        CoreGrid { cores: win.cpu.cores }
                     }
 
-                    Sparkline {
-                        labelA: "Memory Usage (%)"; labelB: ""
-                        colorA: Theme.cyan
-                        seriesA: win.d.history["mem.percent"]
-                    }
-                }
-
-                // ── Cooling & drives ───────────────────────────────────────
-                Card {
-                    title: "Cooling fans"
-                    subtitle: "RPM TELEMETRY"
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.alignment: Qt.AlignTop
-
-                    Text {
-                        visible: win.d.fans.length === 0
-                        text: "No fan sensors reported. Motherboard Super I/O drivers (nct6775, nct6687, it87) expose them."
-                        color: Theme.muted
-                        font.pixelSize: 12
-                        wrapMode: Text.WordWrap
+                    // ── Graphics ───────────────────────────────────────────────
+                    Card {
+                        title: "Graphics"
+                        subtitle: win.gpu ? win.gpu.name : "No supported GPU found"
                         Layout.fillWidth: true
-                    }
-                    Repeater {
-                        // A count model keeps the rows alive between ticks, so they animate
-                        // instead of being rebuilt every second.
-                        model: win.d.fans.length
-                        delegate: BarRow {
-                            required property int index
-                            readonly property var fan: win.d.fans[index] || {}
-                            spinner: true
-                            spinSpeed: (fan.rpm || 0) / 1200
-                            label: fan.name || ""
-                            valueText: fan.text || ""
-                            value: fan.rpm != null ? fan.rpm : NaN
-                            unit: "RPM"
-                            frac: fan.frac || 0
+                        Layout.fillHeight: true
+                        Layout.alignment: Qt.AlignTop
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 12
+                            ArcGauge {
+                                Layout.preferredWidth: 140; Layout.preferredHeight: 150
+                                value: win.g.temp ?? 0; minValue: 20; maxValue: 100
+                                colors: Theme.tempGradient(win.g.temp)
+                                valueText: Theme.fmt(win.g.temp, 0, "°C")
+                                label: "Temp"; coloredLabel: true
+                                footer: win.g.hotspot != null
+                                        ? "Max " + Theme.fmt((win.st("gpu.temp") || {}).max, 0, "°C") + " · Hotspot " + Theme.fmt(win.g.hotspot, 0, "°C")
+                                        : Theme.range(win.st("gpu.temp"), 0, "°C")
+                            }
+                            ArcGauge {
+                                Layout.preferredWidth: 120; Layout.preferredHeight: 150
+                                thickness: 9
+                                value: win.g.load ?? 0
+                                colors: Theme.loadGradient(win.g.load)
+                                valueText: Theme.fmt(win.g.load, 0, "%")
+                                label: "Core"
+                                footer: Theme.range(win.st("gpu.load"), 0, "%")
+                            }
+                            GridLayout {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                columns: 2; columnSpacing: 8; rowSpacing: 8
+                                Tile {
+                                    title: "Clock"; value: Theme.fmt(win.gpu ? win.gpu.mhz : null, 0, " MHz")
+                                    footer: Theme.range(win.st("gpu.mhz"), 0, "", true)
+                                }
+                                Tile {
+                                    title: "Power"; value: Theme.fmt(win.gpu ? win.gpu.power : null, 1, " W")
+                                    footer: Theme.range(win.st("gpu.power"), 1, "", true)
+                                }
+                                Tile {
+                                    title: "Voltage"; value: Theme.fmt(win.gpu ? win.gpu.voltage : null, 3, " V")
+                                    footer: Theme.range(win.st("gpu.voltage"), 3, "", true)
+                                }
+                                Tile {
+                                    title: "Current"; value: Theme.fmt(win.gpu ? win.gpu.current : null, 1, " A")
+                                    estimated: true
+                                    footer: Theme.range(win.st("gpu.current"), 1, "", true)
+                                }
+                            }
+                        }
+
+                        Sparkline {
+                            labelA: "Temp (°C)"; labelB: "Core (%)"
+                            seriesA: win.d.history["gpu.temp"]; minA: 20; maxA: 100
+                            seriesB: win.d.history["gpu.load"]
+                        }
+
+                        BarRow {
+                            visible: win.gpu && win.gpu.vram_total != null
+                            label: "VRAM USAGE"
+                            valueText: win.gpu ? Theme.fmt(win.gpu.vram_used, 1, "") + " / " + Theme.fmt(win.gpu.vram_total, 1, " GB") : ""
+                            frac: win.gpu && win.gpu.vram_total ? win.gpu.vram_used / win.gpu.vram_total : 0
+                            accentText: Theme.fmt(frac * 100, 0, " %")
                         }
                     }
 
-                    RowLayout {
-                        visible: win.d.drives.length > 0
-                        Layout.topMargin: 6
-                        spacing: 8
-                        Facet { size: 13 }
-                        Text {
-                            text: "DRIVES"
-                            color: Theme.text
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 13
-                            font.weight: Font.Bold
-                            font.letterSpacing: 1.2
+                    // ── Memory ─────────────────────────────────────────────────
+                    Card {
+                        title: "Memory"
+                        subtitle: Theme.fmt(win.mem.used, 1, "") + " / " + Theme.fmt(win.mem.total, 1, " GB") + "   " + Theme.fmt(win.mem.percent, 0, " %")
+                        subtitleColor: Theme.cyan
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.alignment: Qt.AlignTop
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            implicitHeight: 8; radius: 4
+                            color: Theme.track
+                            Rectangle {
+                                height: parent.height; radius: parent.radius
+                                width: parent.width * (win.mem.percent ?? 0) / 100
+                                gradient: Gradient {
+                                    orientation: Gradient.Horizontal
+                                    GradientStop { position: 0.0; color: Theme.teal }
+                                    GradientStop { position: 1.0; color: Theme.cyan }
+                                }
+                                Behavior on width { NumberAnimation { duration: 400 } }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            // Configured values (BIOS) when detected, otherwise the module's rated profile from SPD.
+                            Tile {
+                                readonly property string rated: win.mem.rated_clock
+                                    ? win.mem.rated_profile + " " + win.mem.rated_clock + (win.mem.rated_cl ? " CL" + win.mem.rated_cl : "")
+                                    : ""
+                                title: "Clock"
+                                value: Theme.fmt(win.mem.clock ?? win.mem.rated_clock, 0, " MT/s")
+                                badge: win.mem.dimm_detected || !win.mem.rated_clock ? "" : win.mem.rated_profile
+                                footer: win.mem.dimm_detected ? "Configured" + (rated ? " · rated " + rated : "")
+                                      : rated ? "Module rating, not confirmed" : "no SPD data"
+                            }
+                            Tile {
+                                title: "Voltage"
+                                value: Theme.fmt(win.mem.voltage ?? win.mem.rated_voltage, 2, " V")
+                                badge: win.mem.dimm_detected || win.mem.rated_voltage == null ? "" : win.mem.rated_profile
+                                // SMBIOS often keeps reporting the JEDEC 1.2 V even with XMP applied.
+                                footer: win.mem.dimm_detected
+                                      ? "As reported by BIOS" + (win.mem.rated_voltage != null && Math.abs(win.mem.rated_voltage - win.mem.voltage) > 0.005
+                                                                 ? " · " + win.mem.rated_profile + " " + Theme.fmt(win.mem.rated_voltage, 2, " V") : "")
+                                      : win.mem.rated_voltage != null ? "Module rating, not confirmed" : "needs Detect"
+                            }
+                            Tile {
+                                visible: win.mem.temp != null
+                                title: "Temperature"; value: Theme.fmt(win.mem.temp, 1, "°C")
+                                footer: Theme.range(win.st("mem.temp"), 1, "", true)
+                            }
+                            Tile {
+                                visible: win.mem.temp == null
+                                title: "Modules"; value: win.mem.modules || "N/A"
+                                footer: win.mem.part ? win.mem.part + " · " + win.mem.mem_type : "no SPD data"
+                            }
+                            Tile {
+                                title: "Swap"; value: Theme.fmt(win.mem.swap_used, 1, "") + " / " + Theme.fmt(win.mem.swap_total, 0, " GB")
+                                footer: Theme.range(win.st("mem.swap_used"), 2, " GB")
+                            }
+                        }
+
+                        Rectangle {
+                            visible: !win.mem.dimm_detected
+                            Layout.fillWidth: true
+                            implicitHeight: detectRow.implicitHeight + 16
+                            radius: 10
+                            color: Qt.rgba(0, 0.67, 0.53, 0.08)
+                            border.color: "#14524b"
+                            RowLayout {
+                                id: detectRow
+                                anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 10; leftMargin: 12 }
+                                spacing: 10
+                                Facet { size: 12 }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: backend.detectState && backend.detectState !== "running"
+                                          ? "Could not read the BIOS memory settings (" + backend.detectState + "). From a terminal: sudo dmidecode -t 17 | rankine --import-dimm"
+                                          : "The speed and voltage the BIOS actually applied are in the SMBIOS tables, readable only as admin. Detect once and Rankine remembers it."
+                                    color: Theme.muted
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                }
+                                PillButton {
+                                    text: backend.detectState === "running" ? "Detecting…" : "Detect"
+                                    outlined: true
+                                    accent: Theme.mint
+                                    onClicked: backend.detectDimms()
+                                }
+                            }
+                        }
+
+                        Sparkline {
+                            labelA: "Memory Usage (%)"; labelB: ""
+                            colorA: Theme.cyan
+                            seriesA: win.d.history["mem.percent"]
                         }
                     }
-                    Repeater {
-                        model: win.d.drives.length
-                        delegate: BarRow {
-                            required property int index
-                            readonly property var drive: win.d.drives[index] || {}
-                            label: drive.name || ""
-                            valueText: Theme.fmt(drive.temp, 0, "°C")
-                            colors: Theme.tempGradient(drive.temp)
-                            frac: drive.temp != null ? (drive.temp - 20) / ((drive.max || 80) - 20) : 0
+
+                    // ── Cooling & drives ───────────────────────────────────────
+                    Card {
+                        title: "Cooling fans"
+                        subtitle: "RPM TELEMETRY"
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.alignment: Qt.AlignTop
+
+                        Text {
+                            visible: win.d.fans.length === 0
+                            text: "No fan sensors reported. Motherboard Super I/O drivers (nct6775, nct6687, it87) expose them."
+                            color: Theme.muted
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                        }
+                        Repeater {
+                            // A count model keeps the rows alive between ticks, so they animate
+                            // instead of being rebuilt every second.
+                            model: win.d.fans.length
+                            delegate: BarRow {
+                                required property int index
+                                readonly property var fan: win.d.fans[index] || {}
+                                spinner: true
+                                spinSpeed: (fan.rpm || 0) / 1200
+                                label: fan.name || ""
+                                valueText: fan.text || ""
+                                value: fan.rpm != null ? fan.rpm : NaN
+                                unit: "RPM"
+                                frac: fan.frac || 0
+                            }
+                        }
+
+                        RowLayout {
+                            visible: win.d.drives.length > 0
+                            Layout.topMargin: 6
+                            spacing: 8
+                            Facet { size: 13 }
+                            Text {
+                                text: "DRIVES"
+                                color: Theme.text
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 13
+                                font.weight: Font.Bold
+                                font.letterSpacing: 1.2
+                            }
+                        }
+                        Repeater {
+                            model: win.d.drives.length
+                            delegate: BarRow {
+                                required property int index
+                                readonly property var drive: win.d.drives[index] || {}
+                                label: drive.name || ""
+                                valueText: Theme.fmt(drive.temp, 0, "°C")
+                                colors: Theme.tempGradient(drive.temp)
+                                frac: drive.temp != null ? (drive.temp - 20) / ((drive.max || 80) - 20) : 0
+                            }
                         }
                     }
                 }
             }
         }
+
+        TuningPage {}
     }
 }
