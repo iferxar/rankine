@@ -78,6 +78,9 @@ class TuningClient(QObject):
 
     def _fingerprints(self) -> dict[str, str]:
         fps = {}
+        cpu = self._state.get("cpu")
+        if cpu:
+            fps["cpu"] = json.dumps([cpu.get("limits"), cpu.get("co")])
         for card, c in (self._state.get("cards") or {}).items():
             od = c.get("overdrive") or {}
             fps[card] = json.dumps([(c.get("power") or {}).get("cap"), od.get("sclk"), od.get("mclk"),
@@ -223,6 +226,14 @@ class TuningClient(QObject):
     def setOverdrive(self, card: str, values):
         self._change("SetOverdrive", [card, json.dumps({k: int(v) for k, v in values.items()})])
 
+    @Slot("QVariantMap")
+    def setCpuLimits(self, values):
+        self._change("SetCpuLimits", [json.dumps({k: float(v) for k, v in values.items()})])
+
+    @Slot("QVariantList")
+    def setCurveOptimizer(self, margins):
+        self._change("SetCurveOptimizer", [json.dumps([int(m) for m in margins])])
+
     @Slot(str)
     def setFanAuto(self, card: str):
         self._change("SetFanCurve", [card, ""])
@@ -249,9 +260,11 @@ class TuningClient(QObject):
         self._simple("Reset", [card])
 
     # ── stability run: the user runs their own GPU load; the helper reports hangs from the kernel log ──
-    @Slot(int)
-    def startStability(self, minutes: int):
-        self._stability = {"running": True, "duration": minutes * 60, "elapsed": 0, "loaded": 0,
+    @Slot(int, str)
+    def startStability(self, minutes: int, target: str):
+        """target: "gpu" or "cpu", the load that counts as testing."""
+        self._stability = {"running": True, "target": target, "duration": minutes * 60, "elapsed": 0,
+                           "loaded": 0,
                            "fingerprints": self._fingerprints(),
                            "faults_at_start": self._state.get("fault_count", 0), "faults": 0,
                            "verdict": "", "watching": bool(self._state.get("fault_watch"))}
@@ -265,7 +278,7 @@ class TuningClient(QObject):
     def _stability_tick(self):
         st = self._stability
         st["elapsed"] += 1
-        load = (self._backend.data.get("gpu") or {}).get("load")
+        load = (self._backend.data.get(st["target"]) or {}).get("load")
         if isinstance(load, (int, float)) and load >= LOADED_PERCENT:
             st["loaded"] += 1
         st["faults"] = self._state.get("fault_count", 0) - st["faults_at_start"]
@@ -287,7 +300,9 @@ class TuningClient(QObject):
             st["verdict"] = "passed"
             # Settings changed mid-run do not count as tested.
             now = self._fingerprints()
-            self._tested_fp.update({card: fp for card, fp in st["fingerprints"].items() if now.get(card) == fp})
+            # Only the device under load counts as tested.
+            tested = [k for k in st["fingerprints"] if (k == "cpu") == (st["target"] == "cpu")]
+            self._tested_fp.update({k: st["fingerprints"][k] for k in tested if now.get(k) == st["fingerprints"][k]})
             self._update_tested()
         self.stabilityChanged.emit()
 

@@ -125,7 +125,8 @@ class ServiceTest(unittest.TestCase):
     def start(self):
         harness = os.path.join(os.path.dirname(__file__), "tuned_harness.py")
         self.proc = subprocess.Popen([sys.executable, harness, self.root, self.runtime, str(self.CONFIRM),
-                                      "card9", self.kmsg, self.state], stdout=subprocess.PIPE, text=True)
+                                      "card9", self.kmsg, self.state, "fakecpu"],
+                                     stdout=subprocess.PIPE, text=True)
         self.assertEqual(self.proc.stdout.readline().strip(), "ready")
         self.kernel = open(self.kmsg, "w")  # the harness opened the read end before printing "ready"
 
@@ -281,6 +282,35 @@ class ServiceTest(unittest.TestCase):
         self.stop()
         self.start()
         self.assertEqual(self.od(), (2509, 0))
+
+    def test_cpu_state_and_curve_optimizer_revert(self):
+        cpu = self.call("GetState")["cpu"]
+        self.assertEqual(cpu["limits"], {"ppt": 142, "tdc": 95, "edc": 140})
+        self.assertEqual(cpu["co"], [0] * 16)
+        self.assertTrue(cpu["per_core"])
+        r = self.call("SetCurveOptimizer", "s", json.dumps([-10] * 8 + [-15] * 8))
+        self.assertTrue(r["ok"], r)
+        cpu = self.call("GetState")["cpu"]
+        self.assertEqual(cpu["co"], [-10] * 8 + [-15] * 8)
+        self.assertTrue(cpu["risky"])
+        time.sleep(self.CONFIRM + 0.7)
+        self.assertEqual(self.call("GetState")["cpu"]["co"], [0] * 16)
+
+    def test_cpu_limits_and_bad_requests(self):
+        self.assertTrue(self.call("SetCpuLimits", "s", '{"ppt": 120, "tdc": 80}')["ok"])
+        self.assertEqual(self.call("GetState")["cpu"]["limits"], {"ppt": 120, "tdc": 80, "edc": 140})
+        self.assertFalse(self.call("SetCpuLimits", "s", '{"ppt": 500}')["ok"])
+        self.assertFalse(self.call("SetCurveOptimizer", "s", json.dumps([5] * 16))["ok"])
+        self.assertFalse(self.call("SetPowerLimit", "sd", "cpu", 100)["ok"])  # a GPU method on the CPU
+
+    def test_machine_check_restores_cpu(self):
+        self.call("SetCurveOptimizer", "s", json.dumps([-20] * 16))
+        self.kernel.write("3,5,6,-;mce: [Hardware Error]: Machine check events logged\n")
+        self.kernel.flush()
+        time.sleep(0.5)
+        state = self.call("GetState")
+        self.assertEqual(state["fault_count"], 1)
+        self.assertEqual(state["cpu"]["co"], [0] * 16)
 
     def test_invalid_curve_is_refused(self):
         r = self.call("SetFanCurve", "ss", "card9", "[[40, 60], [80, 20]]")

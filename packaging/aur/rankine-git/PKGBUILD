@@ -11,7 +11,8 @@ depends=('python' 'pyside6' 'polkit')
 makedepends=('git' 'python-build' 'python-installer' 'python-setuptools' 'python-wheel')
 optdepends=('pciutils: GPU model names'
             'dmidecode: DIMM speed and voltage'
-            'nvidia-utils: NVIDIA GPU metrics')
+            'nvidia-utils: NVIDIA GPU metrics'
+            'ryzen_smu-dkms-git: Ryzen PBO limits, Curve Optimizer and per-core SMU readings')
 provides=("$_pkgname")
 conflicts=("$_pkgname")
 install=rankine.install

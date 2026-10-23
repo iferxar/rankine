@@ -18,3 +18,6 @@ ValueSlider 1.0 ValueSlider.qml
 OverdriveControl 1.0 OverdriveControl.qml
 StabilityTile 1.0 StabilityTile.qml
 BootProfileTile 1.0 BootProfileTile.qml
+CpuReadings 1.0 CpuReadings.qml
+CpuLimitsControl 1.0 CpuLimitsControl.qml
+CurveOptimizerControl 1.0 CurveOptimizerControl.qml

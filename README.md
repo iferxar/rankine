@@ -47,7 +47,9 @@ the GPU power limit, performance profile, fan curve, clocks and undervolt (AMD),
 before and after each change, and runs timed stability tests. Every change asks for your password
 through polkit and reverts after 15 seconds unless you keep it. If the GPU hangs, or the service
 stops, the card goes back to its original settings. Settings that passed a stability test can be
-saved to apply at every boot; a crash or GPU hang turns that off until you turn it back on. The service is optional and off by
+saved to apply at every boot; a crash or GPU hang turns that off until you turn it back on. On Ryzen 5000
+desktop CPUs with the [`ryzen_smu`](https://github.com/amkillam/ryzen_smu) module loaded, it also
+shows the SMU's per-core voltage and power and sets PBO limits and per-core Curve Optimizer. The service is optional and off by
 default:
 
 ```sh

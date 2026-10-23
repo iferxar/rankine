@@ -1,20 +1,24 @@
 import QtQuick
 import QtQuick.Layouts
 
-// A timed run of the user's own GPU load while rankine-tuned watches the kernel log for hangs.
+// A timed run of the user's own load while rankine-tuned watches the kernel log for GPU hangs and
+// CPU machine-check errors. One test runs at a time; `target` says which load this tile counts.
 ControlTile {
     id: root
     property var stability: ({})
     property bool watching: false
+    property string target: "gpu"
     property int minutes: 15
-    readonly property bool running: !!stability.running
+    readonly property bool mine: (stability.target || "gpu") === target
+    readonly property bool running: mine && !!stability.running
+    readonly property bool otherRunning: !mine && !!stability.running
     readonly property var verdicts: ({
         passed: ["Passed", Theme.mint, "No GPU hang during the run. Keep the settings, or test longer with a heavier load."],
-        failed: ["Failed", Theme.red, "The GPU hung. Rankine restored the original clocks, voltage and power. Back off the last step."],
-        inconclusive: ["Inconclusive", Theme.amber, "The GPU was under load for less than half of the run. Start a game or benchmark first."],
+        failed: ["Failed", Theme.red, "A hang or hardware error was logged. Rankine restored the original settings. Back off the last step."],
+        inconclusive: ["Inconclusive", Theme.amber, "The " + (target === "cpu" ? "CPU" : "GPU") + " was under load for less than half of the run. Start the load first."],
         stopped: ["Stopped", Theme.muted, "Stopped before the end."]
     })
-    readonly property var verdict: verdicts[stability.verdict] || null
+    readonly property var verdict: mine ? verdicts[stability.verdict] || null : null
 
     function mmss(s) { return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") }
 
@@ -24,10 +28,15 @@ ControlTile {
     statusColor: running ? Theme.amber : verdict ? verdict[1] : Theme.muted
 
     Text {
-        text: watching
-              ? "Start a game or GPU benchmark, then start the test. Rankine counts the time the GPU spends "
+        text: !watching ? "Hang detection is not available: rankine-tuned cannot read the kernel log."
+            : root.otherRunning ? "A " + (root.stability.target === "cpu" ? "CPU" : "GPU") + " test is running."
+            : target === "cpu"
+              ? "Start an all-core load (stress-ng, Prime95, y-cruncher), then start the test. Rankine counts "
+                + "the time the CPU spends above 80 % load and watches the kernel log for machine-check errors. "
+                + "Curve Optimizer errors also show at light load and idle, so use the PC normally for a "
+                + "while before applying it at boot."
+              : "Start a game or GPU benchmark, then start the test. Rankine counts the time the GPU spends "
                 + "above 80 % load and watches the kernel log for GPU hangs and resets."
-              : "GPU hang detection is not available: rankine-tuned cannot read the kernel log."
         color: watching ? Theme.muted : Theme.amber
         font.family: Theme.fontFamily
         font.pixelSize: 11
@@ -49,7 +58,7 @@ ControlTile {
     }
     Text {
         visible: root.running || !!root.verdict
-        text: "Under load " + root.mmss(root.stability.loaded || 0) + " · GPU hangs " + (root.stability.faults || 0)
+        text: "Under load " + root.mmss(root.stability.loaded || 0) + " · hangs and errors " + (root.stability.faults || 0)
               + (root.verdict && !root.running ? "\n" + root.verdict[2] : "")
         color: Theme.text
         font.family: Theme.fontFamily
@@ -76,8 +85,9 @@ ControlTile {
             text: root.running ? "Stop" : "Start test"
             outlined: !root.running
             accent: root.running ? Theme.text : Theme.mint
-            enabled: root.watching || root.running
-            onClicked: root.running ? tuner.stopStability() : tuner.startStability(root.minutes)
+            enabled: (root.watching && !root.otherRunning) || root.running
+            opacity: enabled ? 1 : 0.45
+            onClicked: root.running ? tuner.stopStability() : tuner.startStability(root.minutes, root.target)
         }
     }
 }

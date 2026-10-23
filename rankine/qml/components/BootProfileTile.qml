@@ -16,6 +16,12 @@ ControlTile {
     function summary(state) {
         if (!state) return ""
         const s = state.snap || {}, od = s.od || {}, parts = []
+        if (s.co !== undefined) {  // the CPU
+            if (s.ppt) parts.push(Math.round(s.ppt) + " W PPT · " + Math.round(s.tdc) + " A TDC · " + Math.round(s.edc) + " A EDC")
+            if (s.co) parts.push(s.co.every(m => m === s.co[0]) ? "Curve Optimizer " + s.co[0] + " all cores"
+                                                                  : "Curve Optimizer " + s.co.join(" "))
+            return parts.join(" · ")
+        }
         if (s.power_uw) parts.push(Math.round(s.power_uw / 1e6) + " W")
         if (od.sclk_max) parts.push(od.sclk_max + " MHz core")
         if (od.mclk_max) parts.push(od.mclk_max + " MHz memory")

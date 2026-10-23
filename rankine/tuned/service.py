@@ -29,6 +29,7 @@ from .faults import KMSG, FaultWatcher
 from .gpu import FAN_AUTO, VOLTAGE_OFFSET_RANGE, AmdGpuControl, TuningError, amd_controls
 from .polkit import Authorizer
 from .probe import probe
+from .ryzen import CO_RANGE, LAYOUTS, MP1_SET_CO, RyzenControl, RyzenSmu, ryzen_control
 
 CONFIRM_SECONDS = 15
 FAN_INTERVAL_MS = 1000
@@ -59,13 +60,17 @@ class CardState:
 class Tuned(QObject):
     def __init__(self, bus: QDBusConnection, authorizer: Authorizer, runtime_dir: str,
                  controls: dict[str, AmdGpuControl] | None = None, kmsg: str = KMSG,
-                 state_dir: str = SYSTEM_STATE_DIR):
+                 state_dir: str = SYSTEM_STATE_DIR, cpu: RyzenControl | None | str = "detect"):
         super().__init__()
         self.bus = bus
         self.auth = authorizer
         self.baseline_path = os.path.join(runtime_dir, "baseline.json")
         os.makedirs(runtime_dir, exist_ok=True)
-        self.controls = amd_controls() if controls is None else controls
+        self.controls = amd_controls() if controls is None else controls  # GPUs
+        self.cpu = ryzen_control() if cpu == "detect" else cpu
+        # Everything with snapshot()/restore(): baselines, pending changes and the boot profile
+        # treat the CPU as one more device, named "cpu".
+        self.devices = {**self.controls, **({"cpu": self.cpu} if self.cpu else {})}
         self.fans: dict[str, FanCurve] = {}
         self.baseline: dict[str, CardState] = {}
         self.pending: dict | None = None  # {"owner", "items", "deadline", "undo": {card: CardState}}
@@ -74,12 +79,12 @@ class Tuned(QObject):
         self.fan_timer = QTimer(self, interval=FAN_INTERVAL_MS)
         self.fan_timer.timeout.connect(self._drive_fans)
         # Values when the service started, i.e. at boot: the "default" the UI offers to go back to.
-        self.boot = {card: c.snapshot() for card, c in self.controls.items()}
+        self.boot = {card: c.snapshot() for card, c in self.devices.items()}
         self.faults: list[dict] = []
         self.fault_count = 0
         self.watcher = FaultWatcher(self._on_fault, kmsg)
         if not self.watcher.available:
-            log(f"GPU hang detection off: {self.watcher.error}")
+            log(f"hang detection off: {self.watcher.error}")
         self.profile = BootProfile(state_dir)
         self.profile.start_session()
         self._apply_boot_profile()
@@ -87,14 +92,14 @@ class Tuned(QObject):
     # ── state helpers ──
     def _state(self, card: str) -> CardState:
         curve = self.fans.get(card)
-        return CardState(self.controls[card].snapshot(), [list(p) for p in curve.points] if curve else None)
+        return CardState(self.devices[card].snapshot(), [list(p) for p in curve.points] if curve else None)
 
     def _restore(self, card: str, state: CardState) -> None:
-        control = self.controls[card]
         try:
-            control.restore(state.snap)
+            self.devices[card].restore(state.snap)
         finally:
-            self._set_fan(card, state.fan_points)
+            if card in self.controls:
+                self._set_fan(card, state.fan_points)
 
     def _set_fan(self, card: str, points) -> None:
         if points is None:
@@ -188,7 +193,7 @@ class Tuned(QObject):
                 log("boot profile " + self.profile.data["notice"])
             return
         for card, data in self.profile.cards.items():
-            if card not in self.controls:
+            if card not in self.devices:
                 log(f"boot profile: {card} not found, skipped")
                 continue
             before = self._state(card)
@@ -210,6 +215,8 @@ class Tuned(QObject):
 
     def _risky(self, card: str) -> bool:
         """Above the boot power limit or clocks, or undervolted: needs a passed stability test."""
+        if card == "cpu":
+            return self.cpu.risky(self.boot["cpu"])
         now, boot = self.controls[card].snapshot(), self.boot[card]
         if (now["power_uw"] or 0) > (boot["power_uw"] or 0):
             return True
@@ -220,9 +227,11 @@ class Tuned(QObject):
     def _on_fault(self, text: str) -> None:
         self.fault_count += 1
         self.faults = (self.faults + [{"time": time.time(), "text": text}])[-MAX_FAULTS:]
-        log(f"GPU fault in the kernel log: {text}")
-        if self.profile.enabled and any(card in self.controls for card in self.profile.cards):
-            self.profile.disable(time.strftime("Turned off after a GPU hang at %H:%M. Save it again "
+        what = "CPU machine-check error" if "mce" in text.lower() or "machine check" in text.lower() \
+            else "GPU hang"
+        log(f"{what} in the kernel log: {text}")
+        if self.profile.enabled and any(card in self.devices for card in self.profile.cards):
+            self.profile.disable(time.strftime(f"Turned off after a {what} at %H:%M. Save it again "
                                                "once the settings pass a stability test."))
             log("boot profile turned off")
         if self.pending:
@@ -230,7 +239,7 @@ class Tuned(QObject):
             self.revert_timer.stop()
         for card, original in self.baseline.items():
             try:
-                self.controls[card].restore(original.snap)
+                self.devices[card].restore(original.snap)
                 log(f"{card} clocks, voltage and power restored after the fault")
             except TuningError as e:
                 log(f"{card} restore after the fault failed: {e}")
@@ -244,12 +253,12 @@ class Tuned(QObject):
             if not allowed:
                 self._reply(msg, {"ok": False, "error": reason})
                 return
-            if card not in self.controls:
-                self._reply(msg, {"ok": False, "error": f"unknown card {card!r}"})
+            if card not in (self.controls if action.startswith("gpu") else self.devices):
+                self._reply(msg, {"ok": False, "error": f"unknown device {card!r}"})
                 return
             before = self._state(card)
             try:
-                apply(self.controls[card])
+                apply(self.devices[card])
             except (TuningError, ValueError) as e:
                 try:
                     self._restore(card, before)
@@ -304,11 +313,51 @@ class Tuned(QObject):
                 "risky": self._risky(card),
                 "is_boot_profile": self.profile.cards.get(card) == self._state(card).to_json(),
             }
-        return json.dumps({"cards": cards, "pending": self._pending_json(msg.service()),
+        return json.dumps({"cards": cards, "cpu": self._cpu_state(), "pending": self._pending_json(msg.service()),
                            "confirm_seconds": CONFIRM_SECONDS,
                            "faults": self.faults, "fault_count": self.fault_count,
                            "fault_watch": self.watcher.available,
                            "boot_profile": self.profile.to_json()})
+
+    def _cpu_state(self) -> dict | None:
+        if not self.cpu:
+            return None
+        table = self.cpu.smu.pm_table() or {}
+        return {"table": table, "limits": {"ppt": table.get("ppt_limit"), "tdc": table.get("tdc_limit"),
+                                           "edc": table.get("edc_limit")},
+                "ranges": self.cpu.limit_ranges(), "boot": self.boot["cpu"], "co": self.cpu.curve(),
+                "co_readable": self.cpu.co_readable, "co_error": self.cpu.co_error,
+                "co_range": list(CO_RANGE), "per_core": self.cpu.smu.per_core_co_supported(),
+                "ccds": self.cpu.smu.ccds, "changed": "cpu" in self.baseline, "risky": self._risky("cpu"),
+                "is_boot_profile": self.profile.cards.get("cpu") == self._state("cpu").to_json()}
+
+    @Slot(str, QDBusMessage, result=str)
+    def SetCpuLimits(self, values_json: str, msg: QDBusMessage) -> str:
+        """values_json: any of {"ppt": W, "tdc": A, "edc": A}."""
+        try:
+            values = {k: float(v) for k, v in json.loads(values_json).items() if k in ("ppt", "tdc", "edc")}
+        except (ValueError, TypeError, AttributeError):
+            msg.setDelayedReply(True)
+            self._reply(msg, {"ok": False, "error": "invalid limits request"})
+            return ""
+        units = {"ppt": "W", "tdc": "A", "edc": "A"}
+        description = ", ".join(f"{k.upper()} {v:.0f} {units[k]}" for k, v in values.items()) or "no change"
+        self._change(msg, "cpu-limits", "cpu", description, lambda c: c.set_limits(**values))
+        return ""
+
+    @Slot(str, QDBusMessage, result=str)
+    def SetCurveOptimizer(self, margins_json: str, msg: QDBusMessage) -> str:
+        """margins_json: one margin per core, in core order."""
+        try:
+            margins = [int(m) for m in json.loads(margins_json)]
+        except (ValueError, TypeError):
+            msg.setDelayedReply(True)
+            self._reply(msg, {"ok": False, "error": "invalid Curve Optimizer request"})
+            return ""
+        description = ("Curve Optimizer all cores " + str(margins[0]) if len(set(margins)) == 1
+                       else "Curve Optimizer " + " ".join(str(m) for m in margins))
+        self._change(msg, "cpu-curve", "cpu", description, lambda c: c.set_curve(margins))
+        return ""
 
     @Slot(str, float, QDBusMessage, result=str)
     def SetPowerLimit(self, card: str, watts: float, msg: QDBusMessage) -> str:
@@ -374,8 +423,8 @@ class Tuned(QObject):
     def SaveBootProfile(self, card: str, msg: QDBusMessage) -> str:
         """Applies the card's current settings at every boot from now on."""
         def run():
-            if card not in self.controls:
-                return {"ok": False, "error": f"unknown card {card!r}"}
+            if card not in self.devices:
+                return {"ok": False, "error": f"unknown device {card!r}"}
             if self.pending:
                 return {"ok": False, "error": "keep or revert the current change first"}
             self.profile.store(card, self._state(card).to_json())
@@ -446,7 +495,7 @@ class Tuned(QObject):
         return json.dumps({"ok": True})
 
 
-def reset_from_baseline(runtime_dir: str, controls: dict[str, AmdGpuControl] | None = None) -> int:
+def reset_from_baseline(runtime_dir: str, controls: dict | None = None) -> int:
     """Crash recovery: restore whatever a previous run left changed. Safe to run when nothing was."""
     path = os.path.join(runtime_dir, "baseline.json")
     try:
@@ -457,15 +506,20 @@ def reset_from_baseline(runtime_dir: str, controls: dict[str, AmdGpuControl] | N
     except (OSError, ValueError) as e:
         log(f"cannot read {path}: {e}")
         return 1
-    controls, status = amd_controls() if controls is None else controls, 0
+    devices, status = dict(amd_controls() if controls is None else controls), 0
+    if "cpu" in baseline and "cpu" not in devices:
+        cpu = ryzen_control()
+        if cpu:
+            devices["cpu"] = cpu
     for card, data in baseline.items():
         state = CardState.from_json(data)
-        control = controls.get(card)
+        control = devices.get(card)
         if control is None:
             continue
         try:
             control.restore(state.snap)
-            control.set_fan_auto()
+            if card != "cpu":
+                control.set_fan_auto()
             log(f"{card} restored to its original settings")
         except TuningError as e:
             log(f"{card} restore failed: {e}")
@@ -474,14 +528,61 @@ def reset_from_baseline(runtime_dir: str, controls: dict[str, AmdGpuControl] | N
     return status
 
 
+def cpu_report(verify_co: bool = False) -> int:
+    """Read-only check of the Ryzen SMU interface, for verifying a new CPU or table version."""
+    smu = RyzenSmu()
+    if not smu.available:
+        print("ryzen_smu is not loaded")
+        return 1
+    version = smu.table_version()
+    report = {"driver": smu.driver_version(), "codename": smu.codename(),
+              "pm_table_version": hex(version) if version is not None else None,
+              "layout_known": version in LAYOUTS, "ccds": smu.ccds,
+              "per_core_co_supported": smu.per_core_co_supported()}
+    try:
+        table = smu.pm_table()
+        report["pm_table"] = table
+        if table is None and version in LAYOUTS:
+            report["pm_table_error"] = "values failed the sanity check"
+    except OSError as e:
+        report["pm_table_error"] = str(e)
+    try:
+        report["curve_optimizer"] = [smu.get_co(c) for c in smu.all_cores]
+    except TuningError as e:
+        report["curve_optimizer_error"] = str(e)
+    if verify_co and "curve_optimizer" in report:
+        # A read of 0 is also what a command that does nothing returns: write a small margin to the
+        # last core, read it back, then put the original value back.
+        core = smu.all_cores[-1]
+        original = report["curve_optimizer"][-1]
+        probe_margin = -5 if original != -5 else -4
+        try:
+            smu.set_co(core, probe_margin)
+            read_back = smu.get_co(core)
+        finally:
+            smu.command("mp1", MP1_SET_CO, [smu.core_mask(core) | (original & 0xFFFF)])
+        report["curve_optimizer_verify"] = {"core": core, "wrote": probe_margin, "read_back": read_back,
+                                            "restored": smu.get_co(core) == original,
+                                            "ok": read_back == probe_margin}
+    print(json.dumps(report, indent=1))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="rankine-tuned", description="Rankine tuning helper service.")
     parser.add_argument("--session", action="store_true",
                         help="serve on the session bus, unprivileged and without polkit (development)")
     parser.add_argument("--reset", action="store_true",
                         help="restore settings a crashed run left changed, then exit")
+    parser.add_argument("--cpu-report", action="store_true",
+                        help="print what ryzen_smu reports (PM table, Curve Optimizer), read-only, then exit")
+    parser.add_argument("--verify-co", action="store_true",
+                        help="with --cpu-report: write -5 to the last core's Curve Optimizer, read it "
+                             "back and restore it, to prove the read command works")
     parser.add_argument("--version", action="version", version=f"rankine-tuned {__version__}")
     args = parser.parse_args(argv)
+    if args.cpu_report:
+        return cpu_report(args.verify_co)
 
     runtime_dir = (os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "rankine-tuned")
                    if args.session else SYSTEM_RUNTIME_DIR)

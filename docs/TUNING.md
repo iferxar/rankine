@@ -2,7 +2,9 @@
 
 Status: **phase 2 done**: GPU power limit, performance profile, fan curve, clocks and undervolt,
 applied through `rankine-tuned` with polkit, automatic revert and GPU hang detection, plus a
-boot profile for settings that passed a stability test. CPU tuning is not started. The monitor itself still never needs root.
+boot profile for settings that passed a stability test. **Phase 3 done** for Zen 3: PBO limits and
+per-core Curve Optimizer through `ryzen_smu`, with live SMU readings. The monitor itself still never
+needs root.
 This document describes how it could grow into a tuner for the GPU (in the spirit of MSI Afterburner)
 and the CPU (in the spirit of ClockTuner for Ryzen), and the rules it has to follow while doing so.
 
@@ -24,7 +26,7 @@ and the CPU (in the spirit of ClockTuner for Ryzen), and the rules it has to fol
 
 ## What the reference machine exposes
 
-Measured on the development box (Ryzen 9 5900XT, Radeon RX 6800 XT class `0x73bf`, kernel 7.3 CachyOS):
+Measured on the development box (Ryzen 9 5900XT, Radeon RX 6900 XT, `0x73bf` rev `c0`, kernel 7.3 CachyOS):
 
 | Interface | State | Notes |
 |---|---|---|
@@ -124,10 +126,10 @@ These apply to every phase and are not optional:
 ### Phase 2 · GPU overdrive (v0.4) — done
 Requires `amdgpu.ppfeaturemask=0xffffffff`. The UI explains how to add it for the user's bootloader
 and that it should be removed if tuning is abandoned. With it, the driver also widens the power
-limit (an RX 6800 XT goes from 237–264 W to 237–303 W); raising it above the default is flagged as
+limit (an RX 6900 XT goes from 237–264 W to 237–303 W); raising it above the default is flagged as
 overclocking in the UI.
 - `pp_od_clk_voltage` is parsed for the current values and the ranges the card accepts (`OD_RANGE`),
-  so limits come from the driver, not from a table in Rankine. Example (RX 6800 XT):
+  so limits come from the driver, not from a table in Rankine. Example (RX 6900 XT):
   core 500–3000 MHz, memory 674–1075 MHz, plus `OD_VDDGFX_OFFSET`.
 - `SetOverdrive` (polkit action `gpu-clocks`) edits the max core clock, max memory clock and voltage
   offset, then commits with `c`, as the driver expects. The driver gives no range for the voltage
@@ -158,16 +160,37 @@ overclocking in the UI.
 - Tests restart the service against the fake card: clean stop and start applies the profile, a
   killed process does not, a GPU hang turns it off, and removing it stops it from applying.
 
-### Phase 3 · CPU, manual (v0.5)
-Requires the `ryzen_smu` kernel module (Zen 3 "Vermeer" is supported by it).
-- **Read the PM table first.** Even before any tuning, it gives real per-core voltage, PPT/TDC/EDC
-  usage and limits. That replaces today's estimated Vcore in the dashboard, which is worth shipping on
-  its own.
-- PBO limits (PPT, TDC, EDC) and per-core Curve Optimizer offsets set by hand.
-- SMU settings are volatile and reset on reboot, which makes experimenting safer than BIOS changes;
-  the "nothing at boot until proven" rule still applies when re-applying them.
-- The exact SMU mailbox commands for Curve Optimizer on Vermeer are community-documented, not
-  vendor-documented. They must be verified on hardware and gated per CPU family.
+### Phase 3 · CPU, manual (v0.5) — done for Zen 3 desktop (Vermeer)
+Requires the `ryzen_smu` kernel module (`ryzen_smu-dkms-git` in the AUR) loaded at boot. Its sysfs
+files are root-only, so everything goes through `rankine-tuned` (`rankine/tuned/ryzen.py`).
+- **PM table.** Layouts for tables `0x380804`/`0x380805` (16 cores) and `0x380904`/`0x380905`
+  (8 cores) are known; limits and package values share positions, the per-core blocks move. The
+  values pass a sanity check (plausible limits and voltages) before they are trusted. The Tuning
+  page shows PPT/TDC/EDC usage against the limits and each core's voltage, effective clock (which
+  averages in sleep time), power and share of time awake. Zen 3 firmware reports EDC pinned near
+  its limit even at idle; the page says so. Feeding these real voltages into the dashboard's
+  estimated Vcore is still to do.
+- **PBO limits** (`SetCpuLimits`, polkit `cpu-limits`): RSMU `0x53`/`0x54`/`0x55` take mW and mA.
+  Lowering is free; raising is capped at 1.5 times the limits read at startup, which come from the
+  BIOS, and is flagged as needing a stability test.
+- **Curve Optimizer** (`SetCurveOptimizer`, polkit `cpu-curve`): MP1 `0x35` per core, with the core
+  mask `ccd << 28 | core << 20` and the margin in the low 16 bits; RSMU `0x7C` reads a core's margin
+  back. ZenStates-Core marked that read as unsure, so `rankine-tuned --cpu-report --verify-co` writes
+  −5 to the last core, reads it back and restores it. On a Ryzen 9 5900XT (table `0x380805`) it read
+  back −5. If the read fails, Curve Optimizer stays off, since the BIOS margins could not be restored.
+  Only −30 to 0 is offered; restores write whatever the BIOS had, positive margins included.
+  Per-core margins need complete CCDs (the OS core order only matches the SMU's physical index then);
+  otherwise one margin applies to all cores.
+- Cores map to CCDs by shared L3 cache.
+- The CPU joins the same machinery as the GPUs, as device `cpu`: confirmation countdown, original
+  values restored on stop or crash (SMU settings are volatile, so a reboot also clears them), the
+  boot profile, and hang detection, which now also reacts to machine-check errors
+  (`mce: [Hardware Error]`).
+- The stability test takes a target: for the CPU it counts time above 80 % CPU load. Curve
+  Optimizer errors often show at light load or idle rather than under full load, which the page
+  points out; phase 4's per-core search is what covers that properly.
+- Tests use a fake SMU (`tests/fakesmu.py`) that encodes margins and limits the way the real one
+  does, both directly and through the service on the session bus.
 
 ### Phase 4 · CPU auto-tuner (experimental, v0.6+)
 A per-core search in the spirit of CTR / PBO2 Tuner:
@@ -192,7 +215,7 @@ Expect a full run to take hours; it must be pausable and resumable.
 | 0.2 | helper + read-only Tuning page | enable the service |
 | 0.3 | GPU power limit, profiles, fan curve, before/after (done) | polkit approval |
 | 0.4 | GPU clocks and undervolt, GPU stability check (done) | kernel parameter |
-| 0.5 | CPU PM table readings, manual PBO / Curve Optimizer | `ryzen_smu` from the AUR |
+| 0.5 | CPU PM table readings, manual PBO / Curve Optimizer (done, Zen 3) | `ryzen_smu` from the AUR |
 | 0.6+ | CPU auto-tuner (experimental) | time, and tolerance for test reboots |
 
 ## Open questions

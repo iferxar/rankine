@@ -136,10 +136,12 @@ ScrollView {
                     }
                     // Without the helper, or for what it cannot control yet, explain instead.
                     Repeater {
-                        model: gpuCard.modelData.features.filter(f => !gpuCard.live
+                        id: gpuRows
+                        readonly property var rows: gpuCard.modelData.features.filter(f => !gpuCard.live
                             || ["gpu-power", "gpu-profile", "gpu-fan"].indexOf(f.id) < 0
                                && !(f.id === "gpu-overdrive" && gpuCard.live.overdrive))
-                        delegate: FeatureRow { required property var modelData; feature: modelData }
+                        model: rows.length  // count model: rows survive the per-second state refresh
+                        delegate: FeatureRow { required property int index; feature: gpuRows.rows[index] }
                     }
                     RowLayout {
                         visible: !!gpuCard.live && gpuCard.live.changed
@@ -163,9 +165,38 @@ ScrollView {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.alignment: Qt.AlignTop
+                CpuReadings {
+                    visible: !!tuner.state.cpu
+                    table: tuner.state.cpu ? tuner.state.cpu.table : ({})
+                }
+                CpuLimitsControl {
+                    visible: !!tuner.state.cpu && !!tuner.state.cpu.ranges
+                    cpu: tuner.state.cpu || ({})
+                }
+                CurveOptimizerControl {
+                    visible: !!tuner.state.cpu
+                    cpu: tuner.state.cpu || ({})
+                }
+                StabilityTile {
+                    visible: !!tuner.state.cpu
+                    target: "cpu"
+                    stability: tuner.stability
+                    watching: !!tuner.state.fault_watch
+                }
+                BootProfileTile {
+                    visible: !!tuner.state.cpu && !!tuner.state.boot_profile
+                    card: "cpu"
+                    live: tuner.state.cpu || ({})
+                    profile: tuner.state.boot_profile || ({})
+                    tested: !!tuner.tested["cpu"]
+                    pending: !!tuner.state.pending
+                }
+                // Without the helper or the SMU, explain what is missing instead.
                 Repeater {
-                    model: page.t.cpu ? page.t.cpu.features : []
-                    delegate: FeatureRow { required property var modelData; feature: modelData }
+                    id: cpuRows
+                    readonly property var rows: page.t.cpu && !tuner.state.cpu ? page.t.cpu.features : []
+                    model: rows.length
+                    delegate: FeatureRow { required property int index; feature: cpuRows.rows[index] }
                 }
             }
 

@@ -1,4 +1,5 @@
-"""Watches the kernel log for amdgpu hangs and resets, the sign that a clock or voltage setting is unstable."""
+"""Watches the kernel log for amdgpu hangs and resets and for CPU machine-check errors: the signs that a
+clock or voltage setting is unstable."""
 from __future__ import annotations
 
 import errno
@@ -10,7 +11,8 @@ from typing import Callable
 from PySide6.QtCore import QObject, QSocketNotifier
 
 KMSG = "/dev/kmsg"
-PATTERN = re.compile(r"amdgpu.*(ring \S+ timeout|GPU reset begin|GPU recovery|gpu hang)", re.I)
+PATTERN = re.compile(r"amdgpu.*(ring \S+ timeout|GPU reset begin|GPU recovery|gpu hang)"
+                     r"|mce: \[Hardware Error\]|Machine check events logged", re.I)
 GROUP_SECONDS = 30  # one hang logs many lines; count them as one fault
 
 

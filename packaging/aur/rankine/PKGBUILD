@@ -10,7 +10,8 @@ depends=('python' 'pyside6' 'polkit')
 makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
 optdepends=('pciutils: GPU model names'
             'dmidecode: DIMM speed and voltage'
-            'nvidia-utils: NVIDIA GPU metrics')
+            'nvidia-utils: NVIDIA GPU metrics'
+            'ryzen_smu-dkms-git: Ryzen PBO limits, Curve Optimizer and per-core SMU readings')
 install=rankine.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')  # replace with `updpkgsums` once the v$pkgver tag is on GitHub

@@ -58,9 +58,10 @@ ControlTile {
         Layout.fillWidth: true
         spacing: 6
         Repeater {
-            model: root.profiles
+            model: root.profiles.length  // a count model survives the state refreshing every second
             delegate: PillButton {
-                required property var modelData
+                required property int index
+                readonly property var modelData: root.profiles[index]
                 readonly property bool on: (root.pickProfile >= 0 ? root.pickProfile : root.profile) === modelData[0]
                 text: root.pretty(modelData[1])
                 outlined: on
